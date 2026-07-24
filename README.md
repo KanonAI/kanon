@@ -12,7 +12,7 @@ machine except the structured bundle you approve for push.
 ## Install
 
 ```bash
-claude plugin marketplace add CanonizeAI/canonize-web
+claude plugin marketplace add CanonizeAI/canonize
 claude plugin install canonize@canonize
 ```
 

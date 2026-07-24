@@ -1,7 +1,7 @@
 {
   "name": "canonize",
   "displayName": "Canonize",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Turn your web app into a verified knowledge base: /canonize:setup signs you in, /canonize:discover maps it from your codebase (--refine also crawls it with Claude in Chrome), /canonize:scan generates grounded feature guides from your code, /canonize:push sends taxonomy to Canonize for review, and /canonize:setup-ci wires per-test coverage from your CI so passing tests verify the claims",
   "author": {
     "name": "Canonize",
