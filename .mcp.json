@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "api": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/index.js"],
+      "env": {
+        "CANONIZE_CFG_URL": "${user_config.server_url}",
+        "CANONIZE_CFG_TOKEN": "${user_config.api_token}",
+        "CANONIZE_CFG_REPO_SLUG": "${user_config.repo_slug}",
+        "CANONIZE_PLUGIN_ROOT": "${CLAUDE_PLUGIN_ROOT}"
+      }
+    }
+  }
+}

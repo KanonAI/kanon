@@ -1,0 +1,323 @@
+{
+  "$id": "https://canonize.dev/schemas/bundle.schema.json",
+  "title": "CanonizeBundle",
+  "description": "Canonize agent-crawl bundle, wire version 1. Evidence (screen graph) + synthesis (taxonomy proposal) produced by the Claude Code plugin and POSTed to /api/ingest.",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "bundleVersion": {
+      "type": "number",
+      "const": 1
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "repoSlug": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+        },
+        "agent": {
+          "type": "object",
+          "properties": {
+            "harness": {
+              "type": "string",
+              "const": "claude-code"
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1
+            },
+            "pluginVersion": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "harness",
+            "model",
+            "pluginVersion"
+          ],
+          "additionalProperties": false
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "repoSlug",
+        "targetUrl",
+        "capturedAt",
+        "agent"
+      ],
+      "additionalProperties": false
+    },
+    "screenGraph": {
+      "type": "object",
+      "properties": {
+        "screens": {
+          "maxItems": 1000,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "url": {
+                "type": "string",
+                "minLength": 1
+              },
+              "urlTemplate": {
+                "type": "string",
+                "minLength": 1
+              },
+              "structuralKey": {
+                "type": "string",
+                "minLength": 1
+              },
+              "title": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "trail": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "area": {
+                "type": "string"
+              },
+              "digest": {
+                "type": "string"
+              },
+              "depth": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "id",
+              "url",
+              "urlTemplate",
+              "structuralKey",
+              "title",
+              "trail",
+              "digest",
+              "depth"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "transitions": {
+          "maxItems": 5000,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "fromId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "action": {
+                "type": "string",
+                "minLength": 1
+              },
+              "toId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "fromId",
+              "action",
+              "toId"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "screens",
+        "transitions"
+      ],
+      "additionalProperties": false
+    },
+    "proposal": {
+      "type": "object",
+      "properties": {
+        "domains": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": {
+                "type": "string"
+              },
+              "space": {
+                "type": "string"
+              },
+              "subdomainType": {
+                "type": "string",
+                "enum": [
+                  "core",
+                  "supporting",
+                  "generic"
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "features": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "route": {
+                      "type": "string"
+                    },
+                    "capabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "confidence": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "evidence": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "route",
+                              "i18n",
+                              "graphql",
+                              "openapi",
+                              "flag",
+                              "nav",
+                              "guard",
+                              "ownership",
+                              "dir",
+                              "module",
+                              "schema",
+                              "crawl",
+                              "affinity",
+                              "agent"
+                            ]
+                          },
+                          "summary": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "summary"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "globs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "routePrefixes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "name",
+                    "description",
+                    "capabilities",
+                    "confidence",
+                    "evidence",
+                    "globs",
+                    "routePrefixes"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "key",
+              "name",
+              "description",
+              "space",
+              "subdomainType",
+              "confidence",
+              "features"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "domains"
+      ],
+      "additionalProperties": false
+    },
+    "transcript": {
+      "type": "string",
+      "maxLength": 200000
+    }
+  },
+  "required": [
+    "bundleVersion",
+    "meta",
+    "screenGraph",
+    "proposal"
+  ],
+  "additionalProperties": false
+}
