@@ -1,16 +1,18 @@
 # Changelog
 
-## 0.10.1 — 2026-07-24
+## 0.10.1 — 2026-07-25
 
 **Published from a dedicated public marketplace.** The plugin now ships from
 `CanonizeAI/canonize` — a self-contained, dist-only mirror — instead of the
 private product repo. Install with:
 
     claude plugin marketplace add CanonizeAI/canonize
-    claude plugin install canonize@canonize
+    claude plugin install canonize
 
 - Fixed the README install command, which still pointed customers at the
   private `canonize-web` product repo.
+- Documented the short install form (`canonize`, not `canonize@canonize`) —
+  the `@marketplace` suffix is only needed to disambiguate across marketplaces.
 
 ## 0.8.0 — 2026-07-21
 

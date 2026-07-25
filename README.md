@@ -13,8 +13,11 @@ machine except the structured bundle you approve for push.
 
 ```bash
 claude plugin marketplace add CanonizeAI/canonize
-claude plugin install canonize@canonize
+claude plugin install canonize
 ```
+
+(If you have another marketplace that also publishes a `canonize` plugin,
+disambiguate with `claude plugin install canonize@canonize`.)
 
 Then, from a project you want to map:
 
