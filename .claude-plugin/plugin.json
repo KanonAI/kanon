@@ -7,7 +7,7 @@
     "name": "Canonize",
     "email": "ejunior@every.io"
   },
-  "repository": "https://github.com/CanonizeAI/canonize-web",
+  "repository": "https://github.com/CanonizeAI/canonize",
   "license": "UNLICENSED",
   "keywords": ["discovery", "crawl", "knowledge-base"],
   "userConfig": {
