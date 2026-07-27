@@ -2,7 +2,7 @@
   "name": "kanon",
   "owner": {
     "name": "Kanon",
-    "email": "ejunior@every.io"
+    "email": "dev@gokanon.com"
   },
   "description": "Kanon customer-side tooling: app discovery from your own Claude Code session",
   "plugins": [

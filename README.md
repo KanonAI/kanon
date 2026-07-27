@@ -113,21 +113,6 @@ your shell/user account can read the files; treat the token like any other
 discipline (never clicks destructive or submit actions), but an agent in a
 production tenant deserves the same caution as any automation.
 
-## Dogfood / develop (this repo)
-
-```bash
-make dev                          # Kanon server on :3000
-export KANON_URL=http://localhost:3000
-export KANON_API_TOKEN=<your local token>
-cd <any project dir>
-claude --plugin-dir /path/to/Kanon/plugin/kanon
-# /kanon:discover https://dev.every.io every-io/every
-```
-
-`/reload-plugins` picks up skill edits mid-session. `make plugin-validate`,
-`make plugin-build`, `make plugin-test`, `make plugin-release-check` from the
-repo root.
-
 ## Troubleshooting
 
 - **`kanon_*` tools missing in a `--plugin-dir` session** — userConfig
