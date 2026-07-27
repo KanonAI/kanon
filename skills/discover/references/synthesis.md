@@ -113,7 +113,7 @@ The second feature is the routeless shape: **no `route` key at all**, empty
     globs** (`dir/**` semantics ONLY) over the feature's code — grep its nouns
     to find the directories, then reduce to a few prefixes, not per-file globs.
     A real boundary **un-halves** the confidence and **enables
-    `/canonize:scan`** to deep-scan just those files. Leave `[]` only when
+    `/kanon:scan`** to deep-scan just those files. Leave `[]` only when
     you truly can't locate the code.
 - `confidence` (0–1) is honest: 0.8+ only for features you saw fully working;
   ~0.5 for empty states or single-glance pages; lower if permission-gated.

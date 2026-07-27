@@ -1,7 +1,7 @@
 {
-  "$id": "https://canonize.dev/schemas/bundle.schema.json",
-  "title": "CanonizeBundle",
-  "description": "Canonize agent-crawl bundle, wire version 1. Evidence (screen graph) + synthesis (taxonomy proposal) produced by the Claude Code plugin and POSTed to /api/ingest.",
+  "$id": "https://gokanon.com/schemas/bundle.schema.json",
+  "title": "KanonBundle",
+  "description": "Kanon agent-crawl bundle, wire version 1. Evidence (screen graph) + synthesis (taxonomy proposal) produced by the Claude Code plugin and POSTed to /api/ingest.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {

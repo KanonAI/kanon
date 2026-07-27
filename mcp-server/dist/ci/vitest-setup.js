@@ -47,7 +47,7 @@ function diffCoveredFiles(baseline, coverage, repoRoot) {
   return out;
 }
 function resolveShardDir(env, repoRoot) {
-  return env.CANONIZE_COVERAGE_DIR || join(repoRoot, ".canonize", "coverage");
+  return env.KANON_COVERAGE_DIR || join(repoRoot, ".kanon", "coverage");
 }
 function appendShard(shardDir, shardId, entry) {
   mkdirSync(shardDir, { recursive: true });
@@ -82,7 +82,7 @@ var PerTestRecorder = class {
   }
 };
 function recorderFromEnv(env, shardId) {
-  const repoRoot = env.CANONIZE_REPO_ROOT || process.cwd();
+  const repoRoot = env.KANON_REPO_ROOT || process.cwd();
   return new PerTestRecorder({
     repoRoot,
     shardDir: resolveShardDir(env, repoRoot),
@@ -95,7 +95,7 @@ function recorderFromEnv(env, shardId) {
 var recorder = recorderFromEnv(process.env, process.pid);
 if (!recorder.instrumented()) {
   console.warn(
-    "[canonize] no globalThis.__coverage__ \u2014 enable Istanbul coverage (coverage.provider='istanbul', run with --coverage) or per-test coverage is skipped."
+    "[kanon] no globalThis.__coverage__ \u2014 enable Istanbul coverage (coverage.provider='istanbul', run with --coverage) or per-test coverage is skipped."
   );
 }
 function testRefOf(task) {

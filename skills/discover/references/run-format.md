@@ -1,6 +1,6 @@
 # Run directory format
 
-Everything lives under `.canonize/runs/<UTC-stamp>/` (e.g.
+Everything lives under `.kanon/runs/<UTC-stamp>/` (e.g.
 `runs/2026-07-16T14-05-00Z/`). The disk is the crawl's source of truth — the
 assemble tool reads these files mechanically, and *you* re-read them to
 recover state and to synthesize.
@@ -11,7 +11,7 @@ screens/NNN-<slug>.json# one file per visited screen, written immediately
 transitions.jsonl      # append-only: one {fromUrl, action, toUrl} per line
 proposal.json          # synthesis output (you write this in step 6)
 report.md              # human-readable summary table (you write this too)
-bundle.json            # written by canonize_assemble_bundle — never by hand
+bundle.json            # written by kanon_assemble_bundle — never by hand
 ```
 
 ## manifest.json

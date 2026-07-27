@@ -1,7 +1,7 @@
 # Scan run directory format
 
 Everything for one scan lives under
-`.canonize/runs/<UTC-stamp>-scan-<featureKey>/` (e.g.
+`.kanon/runs/<UTC-stamp>-scan-<featureKey>/` (e.g.
 `runs/2026-07-16T14-05-00Z-scan-corporate-cards/`). The disk is the source of
 truth — the assemble tool reads these files mechanically, and *you* re-read them
 to recover state (§0 resume) and to compose front matter (§7).
@@ -43,13 +43,13 @@ what passes. Two standing rules they encode:
   `currentAspect`. Omitting the key does the same thing.
 
 If you'd rather read the contract than the prose, call
-`canonize_assemble_guide { check: "schema" }` — it returns a full and a
+`kanon_assemble_guide { check: "schema" }` — it returns a full and a
 minimal example for every artifact. A shape rejection returns them too, so you
 never have to guess twice.
 
 ## manifest.json  (session)
 
-<!-- canonize:example schema=manifest -->
+<!-- kanon:example schema=manifest -->
 ```json
 {
   "kind": "scan",
@@ -85,7 +85,7 @@ progress line = count of `researched` aspects.
 
 You write the plan; the tool materializes it.
 
-<!-- canonize:example schema=aspects -->
+<!-- kanon:example schema=aspects -->
 ```json
 [
   {
@@ -149,7 +149,7 @@ must be unique WITHIN the aspect; a key two aspects happen to share is deduped
 first-wins when `check:merge` folds them into the flat `claims.jsonl` (a key
 claimed by two DIFFERENT statements is reported as a conflict to fix).
 
-<!-- canonize:example schema=claim -->
+<!-- kanon:example schema=claim -->
 ```json
 {"statement":"A card over its monthly limit is declined","codeAnchor":"src/risk/limit-engine.ts::check","normalizedRuleKey":"card-declined-over-monthly-limit","sourcePath":"src/risk/limit-engine.ts","sourceLine":88}
 ```
@@ -176,7 +176,7 @@ The typed index the server renders as the feature's fact surface. Only `name`,
 empty. But **empty means "the source truly has none", not "I didn't look"**:
 extract every section you can support with evidence.
 
-<!-- canonize:example schema=synthesis -->
+<!-- kanon:example schema=synthesis -->
 ```json
 {
   "name": "Corporate Cards",
@@ -252,7 +252,7 @@ Four things that bite, all of them enforced:
 
 ## front-matter.json  (session)
 
-<!-- canonize:example schema=front-matter -->
+<!-- kanon:example schema=front-matter -->
 ```json
 {
   "narrative": [

@@ -2,20 +2,20 @@
 name: discover
 description: >
   Analyze this project's codebase (and optionally crawl the running app with
-  Claude in Chrome) to build a Canonize taxonomy proposal (domains →
+  Claude in Chrome) to build a Kanon taxonomy proposal (domains →
   features → capabilities). Use for "discover my app", "crawl the product",
   "build the knowledge base", "map what our app does".
 argument-hint: "[target-url] [repo-slug] [--refine (adds browser crawl)] [--auto-approve]"
 disable-model-invocation: true
 ---
 
-# Canonize Discover
+# Kanon Discover
 
 Turn the codebase into a **taxonomy proposal**: analyze routes, navigation
 components, middleware guards, schemas, and module structure to build a
 capability-oriented taxonomy. Optionally **refine** by crawling the running
 app in Chrome (pass `--refine`) to corroborate with what
-users actually see. The bundle is pushed later with `/canonize:push`; it
+users actually see. The bundle is pushed later with `/kanon:push`; it
 lands as **proposals for human review**, never as published fact. Fidelity
 over completeness: record only what you found, mark gaps, never invent.
 
@@ -34,8 +34,8 @@ The discover command has two axes:
   navigation breadcrumbs, page titles, and UI features. Use when the codebase
   alone doesn't capture the full IA (dynamic menus, runtime plugins, etc.).
 
-A target URL being available — as an argument, from `.canonize/config.json`,
-or handed over by `/canonize:setup` — is **not** a request to crawl. Every
+A target URL being available — as an argument, from `.kanon/config.json`,
+or handed over by `/kanon:setup` — is **not** a request to crawl. Every
 run needs one because `targetUrl` is a required field of the bundle contract.
 Only the explicit `--refine` flag opens a browser.
 
@@ -71,7 +71,7 @@ happened**, **what's happening now**, and **what the user should do RIGHT NOW**
 1. **Mode check**: this is a refine run (code + browser) **only if the user
    passed `--refine`**. Otherwise, code-only — including when a target URL was
    passed as an argument, read from config, or carried over from
-   `/canonize:setup`. When in doubt, code-only: it is the cheaper, safer
+   `/kanon:setup`. When in doubt, code-only: it is the cheaper, safer
    default, and the user can re-run with `--refine`.
 2. **Chrome** (refine mode only): confirm the Claude in Chrome tools respond
    (`tabs_context`). If unavailable in refine mode, fall back to code-only
@@ -79,27 +79,27 @@ happened**, **what's happening now**, and **what the user should do RIGHT NOW**
    --refine with Chrome connected to also crawl the running app."
 3. **Node**: run `node --version` — need ≥ 20 for the bundled tools. If
    missing, stop with install guidance.
-4. **Config**: read `.canonize/config.json` if present. Merge `$ARGUMENTS`
+4. **Config**: read `.kanon/config.json` if present. Merge `$ARGUMENTS`
    (first = target URL, second = repo slug). Ask the user for anything still
    missing (target URL, repo slug like `owner/app`) — the target URL is
    **bundle metadata**, required by the bundle contract for every run including
    code-only; asking for it never implies a crawl. Write the merged config
-   back to `.canonize/config.json` (never write tokens there).
-   *If there's no `.canonize/config.json` AND no Canonize credential yet*
-   (a first-time project — `canonize_whoami` returns not-signed-in and the
-   shell env is unset), suggest running **`/canonize:setup`** first: it signs
+   back to `.kanon/config.json` (never write tokens there).
+   *If there's no `.kanon/config.json` AND no Kanon credential yet*
+   (a first-time project — `kanon_whoami` returns not-signed-in and the
+   shell env is unset), suggest running **`/kanon:setup`** first: it signs
    in, verifies the workspace, and writes this config for you. You can still
    crawl fresh and push later, but setup is the smoother path.
-5. **Server state**: call `canonize_get_taxonomy`. If it returns approved
+5. **Server state**: call `kanon_get_taxonomy`. If it returns approved
    nodes → **shaped mode** (section 2). If the server is unreachable, tell the
    user and continue in fresh mode — the bundle can be pushed later.
-   *If the `canonize_*` MCP tools themselves are missing* (common in
+   *If the `kanon_*` MCP tools themselves are missing* (common in
    `--plugin-dir` dev sessions), don't stop: the CLI twin at
    `${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js` covers validate/assemble
    (section 7), and taxonomy state can be fetched directly when the shell env
-   is set: `curl -H "authorization: Bearer $CANONIZE_API_TOKEN"
-   "$CANONIZE_URL/api/taxonomy?repoSlug=<slug>"`. Otherwise crawl fresh.
-6. **Run dir**: create `.canonize/runs/<UTC timestamp>/` with
+   is set: `curl -H "authorization: Bearer $KANON_API_TOKEN"
+   "$KANON_URL/api/taxonomy?repoSlug=<slug>"`. Otherwise crawl fresh.
+6. **Run dir**: create `.kanon/runs/<UTC timestamp>/` with
    `manifest.json` (see run-format.md) and `screens/`. Announce the path.
 
 ## 2. Shaped mode (only when an approved taxonomy exists)
@@ -138,7 +138,7 @@ proposal by reading key files directly:
    routes it owns. Grep the feature's nouns to find where its code lives
    (`grep -rlniE '<noun1>|<noun2>' src`), then reduce the hits to a few
    directory prefixes — not per-file globs. A boundary is what **enables
-   `/canonize:scan`** (the deep guide reads only the files inside it) and it
+   `/kanon:scan`** (the deep guide reads only the files inside it) and it
    **un-halves the feature's confidence** — the server halves crawl-only
    confidence because there's no code boundary; supplying one removes that
    penalty. Leave `globs: []` only when you genuinely can't locate the code.
@@ -262,7 +262,7 @@ table with routes, source evidence, dead nav links, plus flagged gaps.
 
 ## 6. Assemble & hand off
 
-1. Call `canonize_assemble_bundle` with the run dir and your model id.
+1. Call `kanon_assemble_bundle` with the run dir and your model id.
    If the MCP tool is unavailable, use the CLI twin instead:
    `node ${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js assemble <runDir>`
    (then `… validate <runDir>/bundle.json`). Either way it dedups screens,
@@ -273,11 +273,11 @@ table with routes, source evidence, dead nav links, plus flagged gaps.
 
 ## 7. Push, approve, and next steps
 
-After assembly, run `/canonize:push` to send the bundle to the server.
+After assembly, run `/kanon:push` to send the bundle to the server.
 
 ### If `--auto-approve` was passed:
 
-After the push lands, call `canonize_approve_all` to bulk-approve all
+After the push lands, call `kanon_approve_all` to bulk-approve all
 proposed nodes. Then immediately proceed to scan: call
 `POST /api/scan-all` with `{ repoSlug, guide: true }` (use curl with the
 API token). Report the fleet status.
@@ -295,16 +295,16 @@ Tell the user clearly:
 > 1. Open the review UI: `<server_url>/discovery/<repoSlug>`
 > 2. Review each proposed domain and feature — accept, edit, or reject
 > 3. Once approved, the pipeline can continue. Run one of:
->    - `/canonize:scan <feature>` to generate the deep, verified guide for
+>    - `/kanon:scan <feature>` to generate the deep, verified guide for
 >      a single approved feature (needs a code boundary — code-mode discovery
 >      derives one)
->    - `/canonize:discover` again (re-discovery auto-detects the
+>    - `/kanon:discover` again (re-discovery auto-detects the
 >      approved structure and runs in shaped mode)
 >    - `make scan-all` or call `POST /api/scan-all` to deep-scan all
 >      approved features
 >
 > To resume this pipeline automatically after approval, re-run
-> `/canonize:discover --auto-approve` — it will detect the approved
+> `/kanon:discover --auto-approve` — it will detect the approved
 > nodes and run a shaped re-discovery followed by scan.
 
 The trust gate is the product's value: proposals become fact only after a
@@ -317,13 +317,13 @@ human decides they're right. Never skip this without the user's explicit
 |---|---|
 | No target URL in args, config, or from the user | Ask for it — it's required **bundle metadata**, not a crawl request. Don't invent one. |
 | `--refine` passed, Claude in Chrome absent | ⚠️ fall back to code-only, say so, and note that `--refine` works once the extension is connected. Never skip the run. |
-| `canonize_*` MCP tools missing (`--plugin-dir` dev) | Use the CLI twin at `${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js` for assemble/validate; fetch taxonomy with curl (§1.5). |
+| `kanon_*` MCP tools missing (`--plugin-dir` dev) | Use the CLI twin at `${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js` for assemble/validate; fetch taxonomy with curl (§1.5). |
 | `get_taxonomy` unreachable | Continue in fresh mode — the bundle pushes later. Say which mode you ended up in. |
-| `get_taxonomy` 404 | Slug owned by another workspace — pick another, or re-run `/canonize:setup` as the account that owns it. |
+| `get_taxonomy` 404 | Slug owned by another workspace — pick another, or re-run `/kanon:setup` as the account that owns it. |
 | A mapper delivers nothing / goes idle | Its final message *was* the report. Re-ask ONCE with the return contract restated; if it's still empty, map that area yourself. |
 | Assemble reports the bundle invalid | Fix `proposal.json` or the screen records and re-assemble. **Never hand-edit `bundle.json`.** |
 | Assemble rejects `crawl` evidence with zero screens | Code-only mode has no screens — re-source that evidence as `route`/`nav`/`module`. |
 | Crawl interrupted (compaction, restart) | Re-read `manifest.json`, resume from `frontier`, skip `visited`. Never start over. |
-| Push 401 | Not signed in — run `/canonize:setup`, or set `CANONIZE_API_TOKEN` for CI. |
+| Push 401 | Not signed in — run `/kanon:setup`, or set `KANON_API_TOKEN` for CI. |
 | Push 404 | Same as `get_taxonomy` 404 — the slug belongs to another workspace. |
 | A feature's code won't localize | `globs: []`, lower confidence, and say so in `report.md`. Never guess a boundary. |

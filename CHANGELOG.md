@@ -3,15 +3,15 @@
 ## 0.10.1 — 2026-07-25
 
 **Published from a dedicated public marketplace.** The plugin now ships from
-`CanonizeAI/canonize` — a self-contained, dist-only mirror — instead of the
+`KanonAI/kanon` — a self-contained, dist-only mirror — instead of the
 private product repo. Install with:
 
-    claude plugin marketplace add CanonizeAI/canonize
-    claude plugin install canonize
+    claude plugin marketplace add KanonAI/kanon
+    claude plugin install kanon
 
 - Fixed the README install command, which still pointed customers at the
-  private `canonize-web` product repo.
-- Documented the short install form (`canonize`, not `canonize@canonize`) —
+  private `kanon-web` product repo.
+- Documented the short install form (`kanon`, not `kanon@kanon`) —
   the `@marketplace` suffix is only needed to disambiguate across marketplaces.
 
 ## 0.8.0 — 2026-07-21
@@ -23,13 +23,13 @@ half of that link.
 
 ### Per-test line coverage → Verified
 
-- **`/canonize:setup-ci`** — wires a tiny coverage collector into your test
+- **`/kanon:setup-ci`** — wires a tiny coverage collector into your test
   suite. It ships as `dist/ci/vitest-setup.js` (Vitest) and
   `dist/ci/jest-setup.cjs` (Jest); both require an **Istanbul** coverage
   provider. The collector snapshots `globalThis.__coverage__` around each test
   and records the exact source lines that test executed, into per-worker shards
-  under `.canonize/coverage`.
-- **`cli.js push-tests [repoSlug]`** (and the `canonize_push_tests` MCP tool)
+  under `.kanon/coverage`.
+- **`cli.js push-tests [repoSlug]`** (and the `kanon_push_tests` MCP tool)
   — merges the shards and POSTs them to the new **`POST /api/tests`**. The
   server replaces the repo's coverage snapshot and re-links its claims, so a
   covered claim earns **Verified** immediately — no re-scan needed. Run it only
@@ -38,11 +38,11 @@ half of that link.
 - `coverage-merge <out.json>` writes the merged payload without pushing, for
   inspection. The wire contract is vendored as `schemas/test-coverage.schema.json`
   and validated offline before every push.
-- `/canonize:scan` now closes with a verification footer — a fresh scan's
+- `/kanon:scan` now closes with a verification footer — a fresh scan's
   claims land **Asserted**, and the footer points the user at
-  `/canonize:setup-ci` so they know how to make passing tests verify them.
+  `/kanon:setup-ci` so they know how to make passing tests verify them.
 
-Requires a Canonize server with `/api/tests` (deploy the server before
+Requires a Kanon server with `/api/tests` (deploy the server before
 releasing this plugin). Additive — no existing wire contract changed.
 
 ## 0.7.0 — 2026-07-20
@@ -121,7 +121,7 @@ diagrams. This release makes the scan produce the structure the guide renders.
 - **Pre-research freshness skip — `check:"freshness"`.** After `select_files`,
   the skill computes the server's plugin guide-input hash locally (the SAME
   `computePluginGuideInputHash` the server stamps, so the two can't drift) and
-  compares it to the stored hash from `canonize_get_guide_status`; an
+  compares it to the stored hash from `kanon_get_guide_status`; an
   `unchanged:true` skips §3–§9 entirely — a re-scan of an untouched feature no
   longer pays a full research pass just to reach `skipped:true` on push. The hash
   folds in the feature's `capabilities` (new `manifest.capabilities`, copied from
@@ -131,7 +131,7 @@ diagrams. This release makes the scan produce the structure the guide renders.
 ## 0.6.0 — 2026-07-20
 
 **The pipeline stopped making sessions guess.** A full dogfood run — setup →
-discover → push → scan of a 16k-file monorepo — spent **29% of its Canonize
+discover → push → scan of a 16k-file monorepo — spent **29% of its Kanon
 tool calls (11 of 38) being rejected for shape**, and another ~5 minutes
 retrieving reports from subagents that had already finished. The grounding gates
 themselves were flawless (309/309 assertions grounded, zero bad anchors) and are
@@ -175,7 +175,7 @@ validator refuses (`"stateMachine": null`, `"lifecycle": null`).
 
 ### Discovery documents the fan-out it was already doing
 
-`/canonize:discover` §3 was a serial six-step procedure; sessions improvised a
+`/kanon:discover` §3 was a serial six-step procedure; sessions improvised a
 parallel mapper fan-out that produced adopt-verbatim output — then lost minutes
 because nothing told the mappers how to deliver.
 
@@ -202,7 +202,7 @@ relaxation, so `bundleVersion` is unchanged and existing bundles stay valid.
 
 ### Fewer, smaller round-trips
 
-- **`canonize_get_taxonomy` returns a compact projection by default.** At 77
+- **`kanon_get_taxonomy` returns a compact projection by default.** At 77
   approved nodes the full payload is 77 KB and **exceeded the MCP response limit
   outright** — in three separate preflights. Compact drops `description` and
   `capabilities` and keeps every structural field; pass `view: "full"` for the
@@ -214,7 +214,7 @@ relaxation, so `bundleVersion` is unchanged and existing bundles stay valid.
 - **A >300-file closure is re-walked at depth 2 automatically.** The graph is
   already in memory, so the retry is one BFS; an explicit `maxForwardDepth` is
   never overridden.
-- **`/canonize:setup` fast-paths** a signed-in session whose config already
+- **`/kanon:setup` fast-paths** a signed-in session whose config already
   agrees with `git remote` — one confirmation instead of re-walking §2–§5.
 
 ### Gates that were crying wolf
@@ -254,11 +254,11 @@ shape.
 
 ## 0.5.1 — 2026-07-19
 
-**Fix: `/canonize:discover` ran the browser crawl by default.** Code-only
+**Fix: `/kanon:discover` ran the browser crawl by default.** Code-only
 was already the documented default, but refine mode triggered on "`--refine`
 **or a target URL**" — and a target URL is present on essentially every run,
-because `/canonize:setup` asks for one, writes it to
-`.canonize/config.json`, and hands it to discovery, while discover's own
+because `/kanon:setup` asks for one, writes it to
+`.kanon/config.json`, and hands it to discovery, while discover's own
 preflight asks for one when it's missing. The condition was true by
 construction, so the default was unreachable.
 
@@ -266,12 +266,12 @@ construction, so the default was unreachable.
 config, or setup handoff — is bundle metadata (the bundle contract requires
 it) and never implies a crawl. Docs that still described discovery as
 crawl-first are corrected: both plugin manifests, the README, and
-`/canonize:setup` (Claude in Chrome is no longer presented as a
+`/kanon:setup` (Claude in Chrome is no longer presented as a
 prerequisite — it's only needed for `--refine`).
 
 ## 0.4.0 — 2026-07-18
 
-`/canonize:scan` with no arguments now scans **all** approved features in a
+`/kanon:scan` with no arguments now scans **all** approved features in a
 loop: it partitions the taxonomy into queued / up-to-date (server input hash
 unchanged) / not-scannable (no boundary), confirms once, then runs the full
 pipeline feature by feature — one failure never stops the fleet, and a final
@@ -284,18 +284,18 @@ re-derived from the server's hash-skip.
 
 ## 0.3.0 — 2026-07-18
 
-Plugin-generated feature guides: **`/canonize:scan`**. The session researches
+Plugin-generated feature guides: **`/kanon:scan`**. The session researches
 one approved feature natively (Read/Grep) while the mechanical stages run the
-**real Canonize server code**, bundled into the MCP server at build time
+**real Kanon server code**, bundled into the MCP server at build time
 (esbuild aliases `@/*` → the app's `src`, with a `server-only` shim) — the same
 import-graph closure, file selection, pruning, and fact collection the server
 uses, so a guide built on your machine matches a server-side scan.
 
-- New tools: `canonize_select_files` (boundary globs → research file set via
-  the real import graph, written to `files.json`), `canonize_collect_facts`
-  (the real fact collector → `facts.json`), `canonize_assemble_guide` (the
+- New tools: `kanon_select_files` (boundary globs → research file set via
+  the real import graph, written to `files.json`), `kanon_collect_facts`
+  (the real fact collector → `facts.json`), `kanon_assemble_guide` (the
   grounding gate: `aspects`/`dive`/`synthesis`/`front-matter`/`freshness`/`full`),
-  `canonize_push_guide`, `canonize_get_guide_status`. CLI twins:
+  `kanon_push_guide`, `kanon_get_guide_status`. CLI twins:
   `dist/cli.js select-files|collect-facts|assemble-guide|push-guide`.
 - The gate enforces the server's discipline mechanically: priority files must be
   read, ≥80% of paragraphs and flow steps must be grounded (a claim ruleRef or a
@@ -304,33 +304,33 @@ uses, so a guide built on your machine matches a server-side scan.
   validated against the vendored wire schema before push. Rule references are
   written as human keys in the run dir and mapped to symbolic `rule:`/`cited:`
   indices at assembly. The model never hand-writes facts or the bundle.
-- `/canonize:discover` now derives a per-feature `boundary` (prefix globs +
+- `/kanon:discover` now derives a per-feature `boundary` (prefix globs +
   route prefixes) when run inside a repo — this un-halves the feature's
-  confidence and is what makes it scannable. `/canonize:status` shows which
+  confidence and is what makes it scannable. `/kanon:status` shows which
   features are scannable and which already have a guide.
 
 ## 0.2.0 — 2026-07-17
 
-One-command onboarding: **`/canonize:setup`**. Sign in from your own Claude
-Code session via device authorization — `canonize_setup_begin` returns a
+One-command onboarding: **`/kanon:setup`**. Sign in from your own Claude
+Code session via device authorization — `kanon_setup_begin` returns a
 short code + verify URL you approve in a browser (sign-up and workspace creation
-happen there), and `canonize_setup_poll` waits for approval and writes the
-machine token to `~/.canonize/credentials.json` (0600). The token is issued
+happen there), and `kanon_setup_poll` waits for approval and writes the
+machine token to `~/.kanon/credentials.json` (0600). The token is issued
 to disk and **never returned to the model or shown in the conversation**; the
-device secret lives only in `~/.canonize/device-pending.json` and is likewise
-never surfaced. The skill then verifies the workspace (`canonize_whoami`),
-writes `.canonize/config.json`, and hands off to `/canonize:discover`.
+device secret lives only in `~/.kanon/device-pending.json` and is likewise
+never surfaced. The skill then verifies the workspace (`kanon_whoami`),
+writes `.kanon/config.json`, and hands off to `/kanon:discover`.
 
-- New tools: `canonize_setup_begin`, `canonize_setup_poll`,
-  `canonize_whoami`. CLI twins: `dist/cli.js setup-begin|setup-poll|whoami`.
-- New config tier: `~/.canonize/credentials.json`, keyed by normalized server
+- New tools: `kanon_setup_begin`, `kanon_setup_poll`,
+  `kanon_whoami`. CLI twins: `dist/cli.js setup-begin|setup-poll|whoami`.
+- New config tier: `~/.kanon/credentials.json`, keyed by normalized server
   URL (multiple instances supported). Precedence now: shell env → plugin
   settings (keychain) → credentials file → project file. Sign out = delete the
-  entry (or the file). `CANONIZE_HOME` overrides the location.
+  entry (or the file). `KANON_HOME` overrides the location.
 - Config resolution is per-tool-call, so a fresh sign-in is picked up without an
-  MCP restart. `canonize_whoami` reports each field's *source*, surfacing a
-  shell `CANONIZE_API_TOKEN` that shadows a fresh sign-in.
-- Guidance across the API/skills now points at `/canonize:setup`; 404 reflects
+  MCP restart. `kanon_whoami` reports each field's *source*, surfacing a
+  shell `KANON_API_TOKEN` that shadows a fresh sign-in.
+- Guidance across the API/skills now points at `/kanon:setup`; 404 reflects
   the "unclaimed slug claims into your workspace on first fetch/ingest" model.
 
 ## 0.1.1 — 2026-07-17
@@ -339,7 +339,7 @@ Fix: the bundled MCP server never started in `--plugin-dir` dev sessions —
 `required: true` userConfig fields fail validation when the install-time
 prompt hasn't run, and Claude Code withholds the plugin's MCP server
 entirely. Config fields are no longer required (the config tiers in
-`config.ts` — shell env → userConfig → `.canonize/config.json` — handle
+`config.ts` — shell env → userConfig → `.kanon/config.json` — handle
 absence, and tools return actionable guidance when unset). Skills now carry
 explicit fallbacks for tool-less sessions: `dist/cli.js validate|assemble`
 and a curl-based push.
@@ -348,15 +348,15 @@ and a curl-based push.
 
 Initial release.
 
-- `/canonize:discover` — breadth-first crawl via Claude in Chrome
+- `/kanon:discover` — breadth-first crawl via Claude in Chrome
   (human-in-the-loop login, read-only guardrails, incremental disk recording,
   compaction-safe resume), nav→capability synthesis, validated bundle
   assembly.
-- `/canonize:push` — schema validation + POST to `/api/ingest`; proposals
-  land behind Canonize's human review gate.
-- `/canonize:status` — taxonomy state + recent ingest runs.
-- Bundled MCP server: `canonize_validate_bundle`,
-  `canonize_assemble_bundle`, `canonize_push_bundle`,
-  `canonize_get_taxonomy`, `canonize_ingest_status`.
+- `/kanon:push` — schema validation + POST to `/api/ingest`; proposals
+  land behind Kanon's human review gate.
+- `/kanon:status` — taxonomy state + recent ingest runs.
+- Bundled MCP server: `kanon_validate_bundle`,
+  `kanon_assemble_bundle`, `kanon_push_bundle`,
+  `kanon_get_taxonomy`, `kanon_ingest_status`.
 - Bundle contract v1 (`schemas/bundle.schema.json`, emitted from the server's
   Zod schema).

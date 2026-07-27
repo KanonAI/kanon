@@ -12,7 +12,7 @@ argument-hint: "[--next | feature-key] [repo-slug]"
 disable-model-invocation: true
 ---
 
-# Canonize Scan
+# Kanon Scan
 
 Take approved features from taxonomy to published guides. The pipeline (§1–§9)
 runs ONE feature at a time: you select the files inside the feature's boundary,
@@ -24,13 +24,13 @@ completeness: every sentence traces to code you read, or it does not ship.**
 **Claims land Asserted, not Verified.** A scan *infers* behavioral rules from the
 code — the server stores them **Asserted** (honest inference), never Verified. A
 claim earns **Verified** only when a passing test covers its source line, and
-that evidence is wired up SEPARATELY by the customer via **`/canonize:setup-ci`**
+that evidence is wired up SEPARATELY by the customer via **`/kanon:setup-ci`**
 (per-test CI coverage → `/api/tests`). Scanning alone never turns a claim green.
 So whenever you report pushed guides (§9, §10), end with the **verification
 footer**:
 
 > Claims land **Asserted** (inferred from code). To verify them with your own
-> tests, run **`/canonize:setup-ci`** — passing tests then move the guide's
+> tests, run **`/kanon:setup-ci`** — passing tests then move the guide's
 > coverage bar off 0%. (Already set up? Coverage you've pushed is applied
 > automatically; nothing to do.)
 
@@ -99,12 +99,12 @@ gate round-trip; internalize them instead.
   `readlog/*`, `dives/*`, `synthesis.json`, `front-matter.json`) and re-run —
   re-run `check:"merge"` rather than editing a merged flat file by hand.
 
-Non-tool sessions (no `canonize_*` MCP tools) use the `dist/cli.js` twins:
+Non-tool sessions (no `kanon_*` MCP tools) use the `dist/cli.js` twins:
 `node ${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js select-files|collect-facts|assemble-guide|push-guide …`.
 
 ## 0. Resume detection (do this first)
 
-Find the newest `.canonize/runs/*-scan-*/manifest.json`. If its `status` is
+Find the newest `.kanon/runs/*-scan-*/manifest.json`. If its `status` is
 anything other than `pushed` or `failed`, this is a resume: re-read
 `manifest.json`, `aspects.resolved.json`, and which `dives/*.json` already
 exist, then continue from the recorded `status`/`currentAspect`. Re-derive
@@ -115,7 +115,7 @@ Research runs in parallel (§5): each aspect owns `claims/<key>.jsonl`,
 `readlog/<key>.jsonl`, and `dives/<key>.json`, all append-only per aspect. So
 re-dispatch ONLY the aspects whose dive is missing or still bouncing — a dive
 that already passed is never re-run. Once every aspect has passed, (re-)run
-`canonize_assemble_guide { check:"merge" }` before §6 (it's idempotent).
+`kanon_assemble_guide { check:"merge" }` before §6 (it's idempotent).
 
 In scan-all mode, finish the interrupted run first, then rebuild the queue
 (§10) and continue — there is no fleet state file; features already pushed drop
@@ -123,11 +123,11 @@ out of the queue via `hasGuide`, so re-deriving is safe.
 
 ## 1. Preflight
 
-1. `canonize_whoami`. Not signed in → stop, point at `/canonize:setup`.
+1. `kanon_whoami`. Not signed in → stop, point at `/kanon:setup`.
 2. **Git root + cleanliness**: find the repo root; run `git status --porcelain`.
    Guides pin the current commit, so a dirty tree makes anchors ambiguous —
    ⚠️ warn and offer to commit (or let the user proceed knowingly).
-3. `canonize_get_taxonomy` — it returns a **compact** projection by default
+3. `kanon_get_taxonomy` — it returns a **compact** projection by default
    (`view: "compact" | "full"`), which drops `description` and `capabilities`
    but keeps every structural field this skill needs: `key`, `parentKey`,
    `state`, `route`, `space`, `boundary`, `hasGuide`, `guideUpdatedAt`. Ask for
@@ -143,16 +143,16 @@ out of the queue via `hasGuide`, so re-deriving is safe.
      taxonomy.
    Read the chosen feature's `boundary: { globs, routePrefixes } | null`.
    - **`boundary` null or empty** → the feature isn't scannable yet. Offer to
-     run `/canonize:discover` (code-mode derives boundaries), OR ask the user
+     run `/kanon:discover` (code-mode derives boundaries), OR ask the user
      for 1–4 prefix globs (`dir/**` semantics) to seed the scan.
 4. **Optional, and single-feature modes ONLY**: the taxonomy already gave you
    `hasGuide` + `guideUpdatedAt`. When a guide exists, you may spend one
-   `canonize_get_guide_status { domainKey, featureKey }` to confirm before
+   `kanon_get_guide_status { domainKey, featureKey }` to confirm before
    committing to a scan, then **offer to skip**. For a DEFINITIVE answer, carry
    its `inputHash` to the §2 freshness pre-skip (it needs `files.json`, which
    doesn't exist until select runs). **Never call `get_guide_status` per feature
    in scan-all mode** (§10.1) — see §10.2 for the re-scan pre-skip.
-5. Create the run dir `.canonize/runs/<UTC-stamp>-scan-<featureKey>/` and
+5. Create the run dir `.kanon/runs/<UTC-stamp>-scan-<featureKey>/` and
    `manifest.json` (`kind:"scan"`, `status:"selecting"`, the feature identity,
    your `model`, empty `aspects`). Record the feature's `capabilities` from the
    taxonomy when you have them — the §2 freshness pre-skip hashes them, so a
@@ -163,7 +163,7 @@ out of the queue via `hasGuide`, so re-deriving is safe.
 
 ## 2. Select
 
-Call `canonize_select_files { runDir, globs }` (the boundary globs). It walks
+Call `kanon_select_files { runDir, globs }` (the boundary globs). It walks
 the import closure and writes `files.json` — **adopt it; never hand-write it.**
 
 - **`closureUnavailable`** (non-TS repo, no import graph): widen the seed by
@@ -175,8 +175,8 @@ the import closure and writes `files.json` — **adopt it; never hand-write it.*
 
 **Freshness pre-skip (only when the feature already has a guide).** Once
 `files.json` is adopted you can prove nothing changed BEFORE spending any
-research: call `canonize_get_guide_status { domainKey, featureKey }` for its
-`inputHash`, then `canonize_assemble_guide { runDir, check:"freshness",
+research: call `kanon_get_guide_status { domainKey, featureKey }` for its
+`inputHash`, then `kanon_assemble_guide { runDir, check:"freshness",
 storedInputHash:"<inputHash>" }`.
 
 - **`unchanged: true`** → the closure, model, feature name and capabilities are
@@ -191,7 +191,7 @@ needs `manifest.capabilities` populated to fire on features that have them (§1.
 
 ## 3. Collect facts
 
-`canonize_collect_facts { runDir }` writes `facts.json` — the mechanical fact
+`kanon_collect_facts { runDir }` writes `facts.json` — the mechanical fact
 surface (data-model table, route map, cron/schedule table, constants). **The
 server renders these facts in the guide; your prose REFERENCES them, it never
 restates them as tables.** Adopt `facts.json`; never hand-write it.
@@ -206,7 +206,7 @@ patterns early). Order user-facing flow first, internals after. Examples:
 `admin-operations`, `customer-ui`, `vendor-integration`. (Aspects over 40 files
 auto-split during resolution.)
 
-Then `canonize_assemble_guide { runDir, check:"aspects" }`. It materializes
+Then `kanon_assemble_guide { runDir, check:"aspects" }`. It materializes
 `filePaths` (first-match over the selected files) + `priorityFiles` and writes
 `aspects.resolved.json`. **Adopt the resolved keys + `priorityFiles`** and copy
 them into `manifest.aspects` (each `{ key, status:"pending" }`). Set
@@ -248,7 +248,7 @@ shared memory, not your context):
 > 3. **Write `dives/<aspectKey>.json`** grounding EVERY paragraph and EVERY flow
 >    step with a `ruleRef` (a key from your claims) and/or an anchor
 >    `"path:line"` onto a file you read. Worked-example constants must be real.
-> 4. `canonize_assemble_guide { runDir, check:"dive", aspectKey:"<key>" }`.
+> 4. `kanon_assemble_guide { runDir, check:"dive", aspectKey:"<key>" }`.
 >    It grades against YOUR per-aspect claims + readlog. Fix bounces (unread
 >    priority file → read it; <80% grounded → add a `ruleRef`/anchor or drop the
 >    sentence; bad anchor → read the file or fix the path) and re-check until it
@@ -267,7 +267,7 @@ the guide ships thinner (the size gate counts blocks, and a lost chapter beats a
 stalled fleet).
 
 **Then merge.** Once every aspect has resolved, run
-`canonize_assemble_guide { runDir, check:"merge" }`. It folds every
+`kanon_assemble_guide { runDir, check:"merge" }`. It folds every
 `claims/<key>.jsonl` + `readlog/<key>.jsonl` into the flat `claims.jsonl` +
 `readlog.jsonl` that §6–§8 read (first-wins dedup). If it reports a `conflict`
 (one rule key claimed by two DIFFERENT statements), rename one key in its owning
@@ -284,7 +284,7 @@ EXACTLY), `edgeCases`, `lifecycle | null`, `entities`, `integrations`,
 `routines`, `parameters`, `decisions`, `openQuestions`, `knownIssues`. **Read
 the source and actively extract every typed section you can support with
 evidence. Leave a section empty ONLY if the source truly has none — don't
-fabricate, but don't be lazy.** Then `canonize_assemble_guide {
+fabricate, but don't be lazy.** Then `kanon_assemble_guide {
 runDir, check:"synthesis" }`.
 
 **Lifecycle is REQUIRED when the feature has states.** If the data carries a
@@ -324,12 +324,12 @@ Set `status:"composing"`. **Re-read the dives on disk** and write
   A, B, C, D, E and F" in one run-on sentence renders as an unreadable wall.
   Write it as a list.
 
-Then `canonize_assemble_guide { runDir, check:"front-matter" }`. See
+Then `kanon_assemble_guide { runDir, check:"front-matter" }`. See
 guide-shape.md for what belongs in front matter vs the fact surface vs prose.
 
 ## 8. Assemble
 
-`canonize_assemble_guide { runDir, check:"full", model:"<your model id>" }`.
+`kanon_assemble_guide { runDir, check:"full", model:"<your model id>" }`.
 It writes `guide-bundle.json` (tool-written — never hand-edit it). Fix any fatal
 errors it lists by correcting the run artifacts you own and re-running (missing
 dive → write it; unknown ruleRef → add the claim or drop the ref; duplicate rule
@@ -341,7 +341,7 @@ warnings. Set `status:"assembled"`.
 1. Confirm `repoSlug` + the feature with the user (`AskUserQuestion`) —
    single-feature modes only. In scan-all mode the one-time §10 confirmation
    covers every push in the loop; never re-ask per feature.
-2. `canonize_push_guide { path:"<runDir>/guide-bundle.json" }` (pass
+2. `kanon_push_guide { path:"<runDir>/guide-bundle.json" }` (pass
    `repoSlug` if the bundle doesn't carry it).
    - **`skipped:true`** → "unchanged — the server kept the existing guide"
      (nothing in the boundary changed since the input hash).
@@ -350,19 +350,19 @@ warnings. Set `status:"assembled"`.
      the next feature (or the rest of the queue).
 3. Set `manifest.status:"pushed"`.
 4. If any guide was pushed (not `skipped`), end with the **verification footer**
-   (intro) — the claims just landed Asserted, and `/canonize:setup-ci` is how
+   (intro) — the claims just landed Asserted, and `/kanon:setup-ci` is how
    they earn Verified.
 
 ## 10. Scan-all loop (default — no arguments)
 
 1. Build the queue **from the taxonomy alone**, in taxonomy order, from every
-   approved feature. `canonize_get_taxonomy` already returns `boundary` and
+   approved feature. `kanon_get_taxonomy` already returns `boundary` and
    `hasGuide` per feature, so this costs **zero extra round-trips**:
    - **queued** — non-empty `boundary`, `hasGuide: false`;
    - **has a guide** — `hasGuide: true`; skipped by default;
-   - **not scannable** — `boundary` null/empty (needs `/canonize:discover`).
+   - **not scannable** — `boundary` null/empty (needs `/kanon:discover`).
 
-   **Do NOT call `canonize_get_guide_status` per feature to partition.** At
+   **Do NOT call `kanon_get_guide_status` per feature to partition.** At
    60 features that is 60 round-trips for an answer it cannot give: input-hash
    staleness is computed from the local file closure, which does not exist until
    `select_files` runs in §2. Queue on `hasGuide` and let the server's hash-skip
@@ -373,7 +373,7 @@ warnings. Set `status:"assembled"`.
    re-scanning the guided ones as an explicit choice — the user knows what
    changed, and the server drops any that didn't. This confirmation covers
    every push in the loop. **If the user opts to re-scan guided features**, do
-   ONE `canonize_get_taxonomy { view: "full" }` and record each feature's
+   ONE `kanon_get_taxonomy { view: "full" }` and record each feature's
    `capabilities` into its manifest, so the §2 freshness pre-skip can cheaply
    drop the unchanged ones (otherwise each does a full research pass only to get
    `skipped:true` on push).
@@ -396,16 +396,16 @@ warnings. Set `status:"assembled"`.
    **verification footer** (intro).
 
 The loop keeps NO fleet state file. Interrupted mid-fleet, the next
-`/canonize:scan` finishes the interrupted run (§0) and re-derives the queue —
+`/kanon:scan` finishes the interrupted run (§0) and re-derives the queue —
 already-pushed features fall out via `hasGuide`.
 
 ## Failure playbook
 
 | Symptom | Do |
 |---|---|
-| `whoami` not signed in | Stop; run `/canonize:setup`. |
+| `whoami` not signed in | Stop; run `/kanon:setup`. |
 | Feature not approved (guide push 404) | Approve it at `/discovery/<slug>` (or bulk-approve), then re-scan. |
-| `boundary` null/empty | Run `/canonize:discover` (derives boundaries) or ask the user for 1–4 prefix globs. |
+| `boundary` null/empty | Run `/kanon:discover` (derives boundaries) or ask the user for 1–4 prefix globs. |
 | `select_files` `closureUnavailable` | Widen the seed with a grep over the feature's nouns; note it in the manifest. |
 | >300 files selected | Re-run `select_files` with `maxForwardDepth: 2`. |
 | Dive bounce: priority file unread | Read the listed files fully, append to `readlog.jsonl`, re-check. |

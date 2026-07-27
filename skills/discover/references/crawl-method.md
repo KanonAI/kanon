@@ -1,6 +1,6 @@
 # The crawl method
 
-Derived from the methodology that produced Canonize's golden KB: treat the
+Derived from the methodology that produced Kanon's golden KB: treat the
 app's navigation as *evidence*, capture structure over pixels, breadth first,
 depth selectively.
 

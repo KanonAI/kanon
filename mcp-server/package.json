@@ -1,5 +1,5 @@
 {
-  "name": "@canonize/plugin-mcp",
+  "name": "@kanon/plugin-mcp",
   "version": "0.4.0",
   "private": true,
   "type": "module"

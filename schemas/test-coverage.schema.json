@@ -1,7 +1,7 @@
 {
-  "$id": "https://canonize.dev/schemas/test-coverage.schema.json",
-  "title": "CanonizeTestCoverage",
-  "description": "Canonize per-test line coverage, wire version 1. One entry per test with the files+lines it executed (from an Istanbul-instrumented CI run), produced by the CI plugin's collector and POSTed to /api/tests. File paths are repo-relative, \"/\"-separated, no leading slash; empty lines[] means whole-file coverage.",
+  "$id": "https://gokanon.com/schemas/test-coverage.schema.json",
+  "title": "KanonTestCoverage",
+  "description": "Kanon per-test line coverage, wire version 1. One entry per test with the files+lines it executed (from an Istanbul-instrumented CI run), produced by the CI plugin's collector and POSTed to /api/tests. File paths are repo-relative, \"/\"-separated, no leading slash; empty lines[] means whole-file coverage.",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {

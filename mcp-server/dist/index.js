@@ -14584,8 +14584,8 @@ import { join as join14, resolve as resolve2 } from "node:path";
 
 // src/api.ts
 var GUIDANCE = {
-  401: "authentication failed \u2014 run /canonize:setup to sign in (CI/dogfood: check CANONIZE_API_TOKEN)",
-  404: "repo slug not found or owned by another workspace \u2014 an unclaimed slug is claimed into your token's workspace on first taxonomy fetch/ingest; if it's claimed elsewhere, pick a different slug or run /canonize:setup with the right account",
+  401: "authentication failed \u2014 run /kanon:setup to sign in (CI/dogfood: check KANON_API_TOKEN)",
+  404: "repo slug not found or owned by another workspace \u2014 an unclaimed slug is claimed into your token's workspace on first taxonomy fetch/ingest; if it's claimed elsewhere, pick a different slug or run /kanon:setup with the right account",
   413: "bundle too large \u2014 drop the transcript, or split the crawl into smaller runs"
 };
 async function request(target, method, path, body) {
@@ -14604,7 +14604,7 @@ async function request(target, method, path, body) {
       ok: false,
       status: 0,
       error: `cannot reach ${target.url}: ${e instanceof Error ? e.message : String(e)}`,
-      guidance: "check the server URL (CANONIZE_URL / .canonize/config.json) and that the Canonize server is running; run /canonize:setup to (re)configure"
+      guidance: "check the server URL (KANON_URL / .kanon/config.json) and that the Kanon server is running; run /kanon:setup to (re)configure"
     };
   }
   let json = void 0;
@@ -14705,6 +14705,16 @@ function getGuideStatus(config, params) {
     featureKey: params.featureKey
   });
   return request(config, "GET", `/api/guide?${q.toString()}`);
+}
+function listChanges(config, repoSlug, opts) {
+  const params = new URLSearchParams({ repoSlug });
+  if (opts?.linearId) params.set("linearId", opts.linearId);
+  if (opts?.status) params.set("status", opts.status);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  return request(config, "GET", `/api/changes?${params}`);
+}
+function updateChangeStatus(config, repoSlug, changeId, status) {
+  return request(config, "POST", "/api/changes", { repoSlug, changeId, status });
 }
 
 // src/assemble.ts
@@ -14920,7 +14930,7 @@ function assemblePayload(params) {
   };
 }
 function resolveShardDir(env, repoRoot) {
-  return env.CANONIZE_COVERAGE_DIR || join2(repoRoot, ".canonize", "coverage");
+  return env.KANON_COVERAGE_DIR || join2(repoRoot, ".kanon", "coverage");
 }
 function readShards(shardDir) {
   if (!existsSync2(shardDir)) return [];
@@ -16023,7 +16033,7 @@ var Validator = class {
 function loadSchema(pluginRoot2) {
   const candidates = [
     pluginRoot2 ? join3(pluginRoot2, "schemas", "test-coverage.schema.json") : null,
-    // Bundled into dist/cli.js → schemas/ is two levels up (plugin/canonize/schemas).
+    // Bundled into dist/cli.js → schemas/ is two levels up (plugin/kanon/schemas).
     join3(
       dirname(fileURLToPath(import.meta.url)),
       "..",
@@ -16085,17 +16095,17 @@ function clean(v) {
 function normalizeUrl(url) {
   return url.trim().replace(/\/+$/, "");
 }
-function canonizeHome(env = process.env) {
-  return clean(env.CANONIZE_HOME) ?? join4(homedir(), ".canonize");
+function kanonHome(env = process.env) {
+  return clean(env.KANON_HOME) ?? join4(homedir(), ".kanon");
 }
 function credentialsPath(env = process.env) {
-  return join4(canonizeHome(env), "credentials.json");
+  return join4(kanonHome(env), "credentials.json");
 }
 function pendingPath(env = process.env) {
-  return join4(canonizeHome(env), "device-pending.json");
+  return join4(kanonHome(env), "device-pending.json");
 }
 function atomicWrite(path, data, env) {
-  mkdirSync2(canonizeHome(env), { recursive: true, mode: 448 });
+  mkdirSync2(kanonHome(env), { recursive: true, mode: 448 });
   const tmp = `${path}.tmp`;
   writeFileSync2(tmp, data, { mode: 384 });
   renameSync(tmp, path);
@@ -16146,7 +16156,7 @@ function clearPending(env = process.env) {
 
 // src/config.ts
 function readProjectConfig(cwd) {
-  const path = join5(cwd, ".canonize", "config.json");
+  const path = join5(cwd, ".kanon", "config.json");
   if (!existsSync3(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync5(path, "utf8"));
@@ -16173,26 +16183,26 @@ function pick(candidates) {
 function resolveInternal(env, cwd) {
   const project = readProjectConfig(cwd);
   const url = pick([
-    [env.CANONIZE_URL, "shell env"],
-    [env.CANONIZE_CFG_URL, "plugin setting (keychain)"],
-    [project.url, "project file (.canonize/config.json)"]
+    [env.KANON_URL, "shell env"],
+    [env.KANON_CFG_URL, "plugin setting (keychain)"],
+    [project.url, "project file (.kanon/config.json)"]
   ]);
   const storedToken = url.value ? credentialFor(env, url.value)?.token : void 0;
   const token = pick([
-    [env.CANONIZE_API_TOKEN, "shell env"],
-    [env.CANONIZE_CFG_TOKEN, "plugin setting (keychain)"],
-    [storedToken, "credentials file (~/.canonize/credentials.json)"]
+    [env.KANON_API_TOKEN, "shell env"],
+    [env.KANON_CFG_TOKEN, "plugin setting (keychain)"],
+    [storedToken, "credentials file (~/.kanon/credentials.json)"]
   ]);
   const repoSlug = pick([
-    [env.CANONIZE_REPO_SLUG, "shell env"],
-    [env.CANONIZE_CFG_REPO_SLUG, "plugin setting (keychain)"],
-    [project.repoSlug, "project file (.canonize/config.json)"]
+    [env.KANON_REPO_SLUG, "shell env"],
+    [env.KANON_CFG_REPO_SLUG, "plugin setting (keychain)"],
+    [project.repoSlug, "project file (.kanon/config.json)"]
   ]);
   return {
     url,
     token,
     repoSlug,
-    pluginRoot: clean(env.CANONIZE_PLUGIN_ROOT) ?? defaultPluginRoot()
+    pluginRoot: clean(env.KANON_PLUGIN_ROOT) ?? defaultPluginRoot()
   };
 }
 function resolveConfig(env = process.env, cwd = process.cwd()) {
@@ -17651,7 +17661,7 @@ function checkFreshness(runDir, pluginVersion2, model, storedInputHash) {
     writerModelId,
     featureName: manifest.featureName,
     capabilitiesCount: capabilities.length,
-    guidance: unchanged === true ? "UNCHANGED \u2014 the stored guide already covers this exact closure/model/name/capabilities. Skip research (\xA73\u2013\xA79) for this feature; a push would only return skipped:true." : unchanged === false ? "CHANGED (or first scan / plugin upgrade) \u2014 the stored hash differs, so research is warranted. Proceed to \xA73." : "no storedInputHash passed \u2014 this is only the locally-computed hash. Pass the inputHash from canonize_get_guide_status to get a definitive unchanged:true/false. Note: manifest.featureName + manifest.capabilities must match the approved feature for the hash to line up (a mismatch fails toward 'changed', never a false skip)."
+    guidance: unchanged === true ? "UNCHANGED \u2014 the stored guide already covers this exact closure/model/name/capabilities. Skip research (\xA73\u2013\xA79) for this feature; a push would only return skipped:true." : unchanged === false ? "CHANGED (or first scan / plugin upgrade) \u2014 the stored hash differs, so research is warranted. Proceed to \xA73." : "no storedInputHash passed \u2014 this is only the locally-computed hash. Pass the inputHash from kanon_get_guide_status to get a definitive unchanged:true/false. Note: manifest.featureName + manifest.capabilities must match the approved feature for the hash to line up (a mismatch fails toward 'changed', never a false skip)."
   };
 }
 var NUMERIC = /\d[\d,_.]*/g;
@@ -18453,6 +18463,9 @@ var FLAG_CALL_RE = /\b(?:useFeatureFlag\w*|isFeatureFlagEnabled\w*|featureFlagEn
 var EVENT_MEMBER_RE = /\b(?:[A-Z][A-Z0-9_]*_)?EVENTS?\.([A-Z0-9_]+)\b/g;
 var EVENT_TRACK_RE = /\.(?:track|capture)\(\s*['"]([^'"]+)['"]/g;
 var EVENT_CALL_RE = /\b(?:captureEvent|trackEvent|logEvent|emitEvent)\(\s*(?:[^,()'"\n]+,\s*)?['"]([^'"]+)['"]/g;
+var EXPERIMENT_CALL_RE = /\b(?:getExperiment|activateExperiment|useExperiment|getVariation|getFeatureVariable|isInExperiment|getExperimentValue)\(\s*['"]([^'"]+)['"]/g;
+var EXPERIMENT_AB_RE = /\b(?:useGrowthBookFeatureValue|getExperimentValue|useExperimentVariant|abTest|splitTest)\(\s*['"]([^'"]+)['"]/g;
+var EXPERIMENT_LD_RE = /\b(?:variation|useFlags)\(\s*['"]([^'"]*(?:experiment|test|ab[-_]|split|variant|trial)[^'"]*)['"]/gi;
 function extractCodeFacts(path, source) {
   const parameters = [];
   const flagSites = [];
@@ -18479,7 +18492,12 @@ function extractCodeFacts(path, source) {
       const site = `${m[1]}@${m.index}`;
       if (seenFlags.has(site)) continue;
       seenFlags.add(site);
-      flagSites.push({ flag: m[1], path, line: lineAt3(source, m.index) });
+      flagSites.push({
+        flag: m[1],
+        path,
+        line: lineAt3(source, m.index),
+        ...extractFlagContext(source, m.index, path)
+      });
     }
   }
   const seen = /* @__PURE__ */ new Set();
@@ -18489,16 +18507,128 @@ function extractCodeFacts(path, source) {
       const event = m[1];
       if (seen.has(event)) continue;
       seen.add(event);
+      const line = lineAt3(source, m.index);
+      const context = extractEventContext(source, m.index, path);
       events.push({
         kind: "event",
         key: event,
-        payload: { event, firedFrom: path },
+        payload: {
+          event,
+          firedFrom: path,
+          ...context
+        },
         sourcePath: path,
-        sourceLine: lineAt3(source, m.index)
+        sourceLine: line
       });
     }
   }
-  return { parameters, flagSites, events };
+  const experiments = [];
+  const seenExperiments = /* @__PURE__ */ new Set();
+  for (const re of [EXPERIMENT_CALL_RE, EXPERIMENT_AB_RE, EXPERIMENT_LD_RE]) {
+    re.lastIndex = 0;
+    while ((m = re.exec(source)) !== null) {
+      const name = m[1];
+      if (seenExperiments.has(name)) continue;
+      seenExperiments.add(name);
+      const eLine = lineAt3(source, m.index);
+      const ctx = extractExperimentContext(source, m.index, path);
+      experiments.push({
+        kind: "experiment",
+        key: name,
+        payload: {
+          experiment: name,
+          firedFrom: path,
+          ...ctx
+        },
+        sourcePath: path,
+        sourceLine: eLine
+      });
+    }
+  }
+  return { parameters, flagSites, events, experiments };
+}
+function extractEventContext(source, matchIndex, path) {
+  const result = {};
+  const lineStart = source.lastIndexOf("\n", matchIndex) + 1;
+  const lineEnd = source.indexOf("\n", matchIndex);
+  const line = source.slice(lineStart, lineEnd === -1 ? void 0 : lineEnd);
+  const head = source.slice(0, 2e3).toLowerCase();
+  if (/analytics\.track|analytics\.identify|analytics\.page/i.test(line)) {
+    result.provider = "segment";
+  } else if (/posthog\.capture|posthog\.identify|\$posthog/i.test(line)) {
+    result.provider = "posthog";
+  } else if (/amplitude\.track|amplitude\.logEvent|amplitude\.getInstance/i.test(line)) {
+    result.provider = "amplitude";
+  } else if (/mixpanel\.track|mixpanel\.people/i.test(line)) {
+    result.provider = "mixpanel";
+  } else if (/gtag\(|ga\(.*send|GoogleAnalytics|ReactGA/i.test(line)) {
+    result.provider = "ga4";
+  } else if (/rudderanalytics|rudder/i.test(line)) {
+    result.provider = "rudderstack";
+  } else if (head.includes("@segment") || head.includes("analytics-node") || head.includes("analytics/core")) {
+    result.provider = "segment";
+  } else if (head.includes("posthog")) {
+    result.provider = "posthog";
+  } else if (head.includes("amplitude")) {
+    result.provider = "amplitude";
+  } else if (head.includes("mixpanel")) {
+    result.provider = "mixpanel";
+  }
+  const afterMatch = source.slice(matchIndex, Math.min(matchIndex + 500, source.length));
+  const propsMatch = afterMatch.match(
+    /['"][^'"]+['"]\s*,\s*\{([^}]{1,400})\}/
+  );
+  if (propsMatch) {
+    const propsStr = propsMatch[1];
+    const propNames = [
+      ...propsStr.matchAll(/(\w+)\s*(?::|,|\})/g)
+    ].map((pm) => pm[1]).filter(
+      (p) => !["true", "false", "null", "undefined", "const", "let", "var"].includes(p)
+    );
+    if (propNames.length > 0) {
+      result.properties = [...new Set(propNames)].slice(0, 20);
+    }
+  }
+  const before = source.slice(Math.max(0, matchIndex - 800), matchIndex);
+  const fnMatch = before.match(
+    /(?:(?:async\s+)?function\s+(\w+)|(?:const|let)\s+(\w+)\s*=\s*(?:async\s*)?\(?|(\w+)\s*(?:=|:)\s*(?:async\s*)?\([^)]*\)\s*(?:=>|:))/g
+  );
+  if (fnMatch) {
+    const lastFn = fnMatch[fnMatch.length - 1];
+    const name = lastFn.match(/(?:function\s+|(?:const|let)\s+)(\w+)/)?.[1] ?? lastFn.match(/(\w+)\s*(?:=|:)/)?.[1];
+    if (name && name.length > 2) {
+      result.trigger = name.replace(/^handle|^on/, "").replace(/([A-Z])/g, " $1").trim().toLowerCase();
+    }
+  }
+  const handlerMatch = before.match(
+    /on(?:Click|Submit|Change|Load|Error|Success|Failure|Complete|Cancel)\s*[=:]/i
+  );
+  if (handlerMatch && !result.trigger) {
+    result.trigger = handlerMatch[0].replace(/\s*[=:]/, "").replace(/^on/, "").replace(/([A-Z])/g, " $1").trim().toLowerCase();
+  }
+  const catMatch = afterMatch.match(/category\s*:\s*['"]([^'"]+)['"]/);
+  if (catMatch) {
+    result.category = catMatch[1];
+  } else {
+    const pathParts = path.split("/");
+    const domainPart = pathParts.find(
+      (p) => !["src", "lib", "libs", "app", "apps", "service", "services", "components", "views", "pages"].includes(p) && p.length > 2
+    );
+    if (domainPart) {
+      result.category = domainPart.replace(/[-_]/g, " ");
+    }
+  }
+  const commentBefore = source.slice(
+    Math.max(0, matchIndex - 200),
+    matchIndex
+  );
+  const commentMatch = commentBefore.match(
+    /(?:\/\/\s*(.{10,100})|\/\*\*?\s*(.{10,100})\s*\*\/)\s*$/
+  );
+  if (commentMatch) {
+    result.description = (commentMatch[1] ?? commentMatch[2]).trim();
+  }
+  return result;
 }
 function literalValue(rhs) {
   const unwrapped = rhs.replace(/;$/, "").trim().replace(/^(?:BigInt|Number)\(\s*(.+?)\s*\)$/, "$1");
@@ -18514,12 +18644,307 @@ function literalValue(rhs) {
   if (wrapped) return wrapped[1].replace(/^['"]|['"]$/g, "");
   return null;
 }
+function extractExperimentContext(source, matchIndex, _path) {
+  const result = {};
+  const head = source.slice(0, 2e3).toLowerCase();
+  if (head.includes("optimizely") || head.includes("@optimizely")) {
+    result.provider = "optimizely";
+  } else if (head.includes("growthbook") || head.includes("@growthbook")) {
+    result.provider = "growthbook";
+  } else if (head.includes("posthog") && (head.includes("experiment") || head.includes("ab_test"))) {
+    result.provider = "posthog";
+  } else if (head.includes("statsig")) {
+    result.provider = "statsig";
+  } else if (head.includes("launchdarkly") || head.includes("ld-client")) {
+    result.provider = "launchdarkly";
+  } else if (head.includes("split") || head.includes("@splitsoftware")) {
+    result.provider = "split";
+  } else if (head.includes("vwo") || head.includes("visual-website-optimizer")) {
+    result.provider = "vwo";
+  } else if (head.includes("unleash") && head.includes("variant")) {
+    result.provider = "unleash";
+  }
+  const after = source.slice(matchIndex, Math.min(matchIndex + 500, source.length));
+  const variantArrayMatch = after.match(/variants?\s*[:=]\s*\[([^\]]{1,200})\]/i);
+  if (variantArrayMatch) {
+    const names = [...variantArrayMatch[1].matchAll(/['"]([^'"]+)['"]/g)].map((vm) => vm[1]);
+    if (names.length > 0) result.variants = names;
+  }
+  if (!result.variants) {
+    const variantChecks = [...after.matchAll(/===?\s*['"]([^'"]+)['"]/g)].map((vm) => vm[1]).filter((v) => /^[a-z0-9_-]+$/i.test(v) && v.length < 30);
+    if (variantChecks.length >= 2) result.variants = [...new Set(variantChecks)];
+  }
+  const before = source.slice(Math.max(0, matchIndex - 300), matchIndex);
+  const commentMatch = before.match(
+    /(?:\/\/\s*(.{10,150})|\/\*\*?\s*([\s\S]{10,200}?)\s*\*\/)\s*$/
+  );
+  if (commentMatch) {
+    const text2 = (commentMatch[1] ?? commentMatch[2]).trim().replace(/\s+/g, " ");
+    if (/hypothes|test.*whether|measure|impact|effect/i.test(text2)) {
+      result.hypothesis = text2;
+    } else {
+      result.trigger = text2;
+    }
+  }
+  const metricMatch = after.match(
+    /(?:metric|goal|conversion|kpi|objective)\s*[:=]\s*['"]([^'"]+)['"]/i
+  );
+  if (metricMatch) result.metric = metricMatch[1];
+  if (/todo.*clean|remove.*experiment|deprecated|concluded|winner/i.test(before) || /todo.*clean|remove.*experiment|deprecated|concluded|winner/i.test(after.slice(0, 200))) {
+    result.status = "concluded";
+  } else {
+    result.status = "active";
+  }
+  return result;
+}
+function extractFlagContext(source, matchIndex, _path) {
+  const result = {};
+  const head = source.slice(0, 2e3).toLowerCase();
+  if (head.includes("launchdarkly") || head.includes("ld-client") || head.includes("ldclient")) {
+    result.provider = "launchdarkly";
+  } else if (head.includes("unleash") || head.includes("@unleash")) {
+    result.provider = "unleash";
+  } else if (head.includes("flagsmith")) {
+    result.provider = "flagsmith";
+  } else if (head.includes("growthbook") || head.includes("@growthbook")) {
+    result.provider = "growthbook";
+  } else if (head.includes("statsig")) {
+    result.provider = "statsig";
+  } else if (head.includes("posthog") && head.includes("flag")) {
+    result.provider = "posthog";
+  } else if (head.includes("process.env") || head.includes("env.")) {
+    result.provider = "env";
+  }
+  const after = source.slice(matchIndex, Math.min(matchIndex + 200, source.length));
+  const defaultMatch = after.match(
+    /(?:default(?:Value)?|fallback)\s*[:=]\s*(['"]([^'"]*)|true|false|\d+)/i
+  );
+  if (defaultMatch) {
+    result.defaultValue = defaultMatch[2] ?? defaultMatch[1];
+  }
+  const secondArg = after.match(/\(\s*['"][^'"]+['"]\s*,\s*(true|false|['"][^'"]*['"]|\d+)/);
+  if (secondArg && !result.defaultValue) {
+    result.defaultValue = secondArg[1].replace(/['"]/g, "");
+  }
+  const before = source.slice(Math.max(0, matchIndex - 200), matchIndex);
+  const comment = before.match(/(?:\/\/\s*(.{10,100})|\/\*\*?\s*(.{10,100})\s*\*\/)\s*$/);
+  if (comment) {
+    result.description = (comment[1] ?? comment[2]).trim();
+  }
+  return result;
+}
 function lineAt3(text2, index2) {
   let line = 1;
   for (let i = 0; i < index2 && i < text2.length; i++) {
     if (text2[i] === "\n") line++;
   }
   return line;
+}
+
+// ../../../src/infrastructure/facts/extract-security-facts.ts
+var PATTERNS = [
+  // ---- A01: Broken Access Control ----
+  {
+    id: "no-auth-route",
+    pattern: /export\s+(?:async\s+)?function\s+(?:GET|POST|PUT|PATCH|DELETE)\b/,
+    severity: "medium",
+    category: "A01:Broken-Access-Control",
+    description: "Route handler without visible auth check in the first 20 lines",
+    remediation: "Add authentication/authorization check at the start of the handler",
+    except: /auth|session|requireUser|requireAdmin|authenticate|authorize|guard|protect|verify/i
+  },
+  {
+    id: "cors-wildcard",
+    pattern: /(?:Access-Control-Allow-Origin|cors)\s*[:=]\s*['"]?\*/i,
+    severity: "high",
+    category: "A01:Broken-Access-Control",
+    description: "CORS wildcard (*) allows any origin to make requests",
+    remediation: "Restrict CORS to specific trusted origins"
+  },
+  // ---- A02: Cryptographic Failures ----
+  {
+    id: "hardcoded-secret",
+    pattern: /(?:secret|password|api_?key|token|private_?key)\s*[:=]\s*['"][A-Za-z0-9+/=_-]{16,}['"]/i,
+    severity: "critical",
+    category: "A02:Cryptographic-Failures",
+    description: "Hardcoded secret, API key, or password in source code",
+    remediation: "Move to environment variables or a secrets manager",
+    except: /example|placeholder|test|mock|fake|dummy|TODO|CHANGE_ME/i
+  },
+  {
+    id: "weak-hash",
+    pattern: /\b(?:createHash|digest)\(\s*['"](?:md5|sha1)['"]/i,
+    severity: "high",
+    category: "A02:Cryptographic-Failures",
+    description: "Using MD5 or SHA1 \u2014 cryptographically broken hash algorithms",
+    remediation: "Use SHA-256 or bcrypt/scrypt/argon2 for passwords"
+  },
+  {
+    id: "plaintext-password-log",
+    pattern: /(?:log|console|logger)\.\w+\(.*(?:password|secret|token|apiKey)/i,
+    severity: "high",
+    category: "A02:Cryptographic-Failures",
+    description: "Logging potentially sensitive data (password, secret, token)",
+    remediation: "Redact sensitive fields before logging",
+    except: /redact|mask|\*\*\*|\.length|expired|invalid/i
+  },
+  // ---- A03: Injection ----
+  {
+    id: "sql-injection",
+    pattern: /\$\{.*\}.*(?:SELECT|INSERT|UPDATE|DELETE|WHERE)\b|\bquery\(\s*`[^`]*\$\{/i,
+    severity: "critical",
+    category: "A03:Injection",
+    description: "Template literal in SQL query \u2014 potential SQL injection",
+    remediation: "Use parameterized queries or an ORM",
+    except: /prisma|sequelize|knex|drizzle|\$queryRaw.*Prisma\.sql/i
+  },
+  {
+    id: "command-injection",
+    pattern: /\b(?:exec|execSync|spawn|execFile)\(\s*(?:`[^`]*\$\{|.*\+\s*(?:req\.|input|param|arg))/i,
+    severity: "critical",
+    category: "A03:Injection",
+    description: "User-influenced value in shell command \u2014 command injection risk",
+    remediation: "Use execFile with argument arrays, never string interpolation in commands"
+  },
+  {
+    id: "eval-usage",
+    pattern: /\beval\(\s*(?!['"])/,
+    severity: "high",
+    category: "A03:Injection",
+    description: "Dynamic eval() \u2014 code injection risk if input is user-influenced",
+    remediation: "Replace eval with JSON.parse, Function constructor, or structured alternatives",
+    except: /eslint|vitest|jest|test/i
+  },
+  {
+    id: "innerhtml",
+    pattern: /\.innerHTML\s*=|dangerouslySetInnerHTML/i,
+    severity: "medium",
+    category: "A03:Injection",
+    description: "Setting innerHTML / dangerouslySetInnerHTML \u2014 XSS risk if content is user-supplied",
+    remediation: "Sanitize HTML with DOMPurify or use textContent instead",
+    except: /sanitize|DOMPurify|marked|markdown/i
+  },
+  // ---- A04: Insecure Design ----
+  {
+    id: "no-rate-limit",
+    pattern: /(?:login|signIn|signUp|register|forgot|reset|verify|otp|mfa)\s*(?:Route|Handler|Action|Controller)/i,
+    severity: "medium",
+    category: "A04:Insecure-Design",
+    description: "Auth endpoint without visible rate limiting",
+    remediation: "Add rate limiting to auth endpoints (login, signup, password reset, OTP)",
+    except: /rateLimit|throttle|limiter|rateLimiter/i
+  },
+  // ---- A05: Security Misconfiguration ----
+  {
+    id: "debug-mode",
+    pattern: /(?:DEBUG|NODE_ENV)\s*[:=!]=?\s*['"]?(?:true|development|debug)['"]?\s*(?:&&|\?|;|\))/,
+    severity: "low",
+    category: "A05:Security-Misconfiguration",
+    description: "Debug/development mode check that may leak info in production",
+    remediation: "Ensure debug features are disabled in production builds"
+  },
+  {
+    id: "error-stack-leak",
+    pattern: /(?:res|response)\.(?:json|send|status)\(.*(?:\.stack|\.message|error\.toString)/i,
+    severity: "medium",
+    category: "A05:Security-Misconfiguration",
+    description: "Error stack trace or message exposed in API response",
+    remediation: "Return generic error messages to clients; log details server-side",
+    except: /production|process\.env\.NODE_ENV/i
+  },
+  // ---- A07: Auth Failures ----
+  {
+    id: "jwt-no-verify",
+    pattern: /jwt\.decode\(/i,
+    severity: "high",
+    category: "A07:Auth-Failures",
+    description: "jwt.decode() without verification \u2014 accepts any token",
+    remediation: "Use jwt.verify() with a secret/public key",
+    except: /\.verify\(|after.*verify/i
+  },
+  {
+    id: "session-no-httponly",
+    pattern: /(?:cookie|setCookie|set-cookie).*(?:httpOnly|HttpOnly|http_only)\s*[:=]\s*false/i,
+    severity: "high",
+    category: "A07:Auth-Failures",
+    description: "Cookie with httpOnly disabled \u2014 accessible to JavaScript (XSS vector)",
+    remediation: "Set httpOnly: true on session and auth cookies"
+  },
+  {
+    id: "no-csrf",
+    pattern: /(?:POST|PUT|PATCH|DELETE).*(?:form|submit|action)/i,
+    severity: "low",
+    category: "A07:Auth-Failures",
+    description: "Mutation form without visible CSRF protection",
+    remediation: "Use CSRF tokens or SameSite cookies",
+    except: /csrf|csrfToken|SameSite|antiForgery|_token|authenticity/i
+  },
+  // ---- A08: Software and Data Integrity ----
+  {
+    id: "unsafe-deserialization",
+    pattern: /JSON\.parse\(\s*(?:req\.|request\.|body|input|params)/i,
+    severity: "low",
+    category: "A08:Data-Integrity",
+    description: "Parsing user input without schema validation",
+    remediation: "Validate parsed data with Zod, Joi, or similar before use",
+    except: /\.parse\(|schema|validate|safeParse|zod|joi|yup/i
+  },
+  // ---- A09: Logging & Monitoring ----
+  {
+    id: "no-error-handling",
+    pattern: /catch\s*\(\s*\w*\s*\)\s*\{\s*\}/,
+    severity: "medium",
+    category: "A09:Logging-Monitoring",
+    description: "Empty catch block \u2014 errors silently swallowed",
+    remediation: "Log the error or handle it meaningfully"
+  },
+  // ---- Sensitive Data Exposure ----
+  {
+    id: "pii-in-url",
+    pattern: /(?:email|ssn|phone|password|token|secret)\s*[:=]\s*.*(?:searchParams|query|params|url)/i,
+    severity: "high",
+    category: "Sensitive-Data-Exposure",
+    description: "Sensitive data (email, SSN, token) passed in URL parameters",
+    remediation: "Send sensitive data in request body or headers, never in URLs",
+    except: /type.*email|placeholder|label|name\s*=/i
+  }
+];
+function extractSecurityFacts(path, source) {
+  if (/\.test\.|\.spec\.|__test__|fixtures|mock|\.stories\.|\.d\.ts$/i.test(path)) {
+    return [];
+  }
+  const facts = [];
+  const lines = source.split("\n");
+  for (const sp of PATTERNS) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!sp.pattern.test(line)) continue;
+      if (sp.except) {
+        const context = lines.slice(Math.max(0, i - 3), Math.min(lines.length, i + 4)).join("\n");
+        if (sp.except.test(context)) continue;
+      }
+      if (sp.id === "no-auth-route") {
+        const handlerBlock = lines.slice(i, Math.min(lines.length, i + 20)).join("\n");
+        if (sp.except.test(handlerBlock)) continue;
+      }
+      facts.push({
+        kind: "security",
+        key: `${sp.id}:${path}:${i + 1}`,
+        payload: {
+          finding: sp.id,
+          severity: sp.severity,
+          category: sp.category,
+          description: sp.description,
+          remediation: sp.remediation,
+          evidence: line.trim().slice(0, 200)
+        },
+        sourcePath: path,
+        sourceLine: i + 1
+      });
+      break;
+    }
+  }
+  return facts;
 }
 
 // ../../../src/infrastructure/facts/collect-facts.ts
@@ -18680,6 +19105,7 @@ var StackFactCollector = class {
       }
     }
     const flagSites = /* @__PURE__ */ new Map();
+    const flagContext = /* @__PURE__ */ new Map();
     const events = /* @__PURE__ */ new Map();
     const parameters = /* @__PURE__ */ new Map();
     for (const [path, src] of sources) {
@@ -18698,6 +19124,16 @@ var StackFactCollector = class {
         const sites = flagSites.get(f.flag) ?? [];
         sites.push({ path: f.path, line: f.line });
         flagSites.set(f.flag, sites);
+        if (f.provider || f.description || f.defaultValue) {
+          const existing = flagContext.get(f.flag);
+          if (!existing) {
+            flagContext.set(f.flag, {
+              provider: f.provider,
+              description: f.description,
+              defaultValue: f.defaultValue
+            });
+          }
+        }
       }
       if (/constants\.[tj]sx?$/.test(path)) continue;
       for (const e of found.events) if (!events.has(e.key)) events.set(e.key, e);
@@ -18711,18 +19147,53 @@ var StackFactCollector = class {
       return score(b) - score(a);
     });
     facts.push(...rankedParams.slice(0, PERSIST_CAP));
-    const rankedFlags = [...flagSites.entries()].map(([flag, sites]) => ({
-      kind: "flag",
-      key: flag,
-      payload: { flag, sites: sites.slice(0, 40) },
-      sourcePath: sites[0].path,
-      sourceLine: sites[0].line
-    })).sort((a, b) => proximity(b.sourcePath) - proximity(a.sourcePath));
+    const rankedFlags = [...flagSites.entries()].map(([flag, sites]) => {
+      const ctx = flagContext.get(flag);
+      return {
+        kind: "flag",
+        key: flag,
+        payload: {
+          flag,
+          sites: sites.slice(0, 40),
+          ...ctx?.provider ? { provider: ctx.provider } : {},
+          ...ctx?.description ? { description: ctx.description } : {},
+          ...ctx?.defaultValue ? { defaultValue: ctx.defaultValue } : {}
+        },
+        sourcePath: sites[0].path,
+        sourceLine: sites[0].line
+      };
+    }).sort((a, b) => proximity(b.sourcePath) - proximity(a.sourcePath));
     facts.push(...rankedFlags.slice(0, PERSIST_CAP));
     const rankedEvents = [...events.values()].sort(
       (a, b) => proximity(b.sourcePath) - proximity(a.sourcePath)
     );
     facts.push(...rankedEvents.slice(0, PERSIST_CAP));
+    const experiments = /* @__PURE__ */ new Map();
+    for (const [path, src] of sources) {
+      if (TEST_PATH.test(path)) continue;
+      if (!isSeed(path)) continue;
+      const found = extractCodeFacts(path, src);
+      for (const e of found.experiments) {
+        if (!experiments.has(e.key)) experiments.set(e.key, e);
+      }
+    }
+    const rankedExperiments = [...experiments.values()].sort(
+      (a, b) => proximity(b.sourcePath) - proximity(a.sourcePath)
+    );
+    facts.push(...rankedExperiments.slice(0, PERSIST_CAP));
+    const securityFindings = [];
+    for (const [path, src] of sources) {
+      if (TEST_PATH.test(path)) continue;
+      if (!isSeed(path)) continue;
+      securityFindings.push(...extractSecurityFacts(path, src));
+    }
+    const severityRank = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+    const rankedSecurity = securityFindings.sort((a, b) => {
+      const sa = severityRank[a.payload.severity] ?? 0;
+      const sb = severityRank[b.payload.severity] ?? 0;
+      return sb - sa;
+    });
+    facts.push(...rankedSecurity.slice(0, PERSIST_CAP));
     return ok(facts);
   }
 };
@@ -18890,9 +19361,42 @@ function summarizeFacts(facts) {
   }
   const events = by("event");
   if (events.length) {
-    lines.push(
-      `Analytics events (${events.length}): ${events.slice(0, 40).map((e) => e.key).join(", ")}`
-    );
+    lines.push(`Analytics events (${events.length}):`);
+    for (const e of events.slice(0, 40)) {
+      const p = e.payload;
+      const parts = [p.event];
+      if (p.provider) parts.push(`[${p.provider}]`);
+      if (p.trigger) parts.push(`trigger: ${p.trigger}`);
+      if (p.properties && p.properties.length > 0) {
+        parts.push(`props: {${p.properties.slice(0, 8).join(", ")}}`);
+      }
+      if (p.category) parts.push(`(${p.category})`);
+      lines.push(`  ${parts.join(" \xB7 ")}`);
+    }
+    if (events.length > 40) {
+      lines.push(`  ... and ${events.length - 40} more events`);
+    }
+  }
+  const exps = by("experiment");
+  if (exps.length) {
+    lines.push(`Experiments (${exps.length}):`);
+    for (const e of exps.slice(0, 20)) {
+      const p = e.payload;
+      const parts = [p.experiment];
+      if (p.provider) parts.push(`[${p.provider}]`);
+      if (p.status) parts.push(`(${p.status})`);
+      if (p.variants && p.variants.length > 0) parts.push(`variants: ${p.variants.join(", ")}`);
+      if (p.hypothesis) parts.push(`\u2014 ${p.hypothesis.slice(0, 80)}`);
+      lines.push(`  ${parts.join(" ")}`);
+    }
+  }
+  const sec = by("security");
+  if (sec.length) {
+    lines.push(`Security findings (${sec.length}):`);
+    for (const s of sec.slice(0, 20)) {
+      const p = s.payload;
+      lines.push(`  [${p.severity}] ${p.description} (${p.category}) \u2014 ${s.sourcePath}:${s.sourceLine}`);
+    }
   }
   return lines.join("\n");
 }
@@ -19565,7 +20069,7 @@ async function setupBegin(serverUrl, deps) {
     return {
       ok: false,
       error: "no server URL given",
-      guidance: "pass the Canonize server URL, e.g. http://localhost:3000"
+      guidance: "pass the Kanon server URL, e.g. http://localhost:3000"
     };
   }
   const r = await deviceStart(url);
@@ -19581,7 +20085,7 @@ async function setupBegin(serverUrl, deps) {
       return {
         ok: false,
         error: r.error,
-        guidance: "this server doesn't expose device sign-in (/api/device/start not found) \u2014 the Canonize instance is too old or the URL is wrong"
+        guidance: "this server doesn't expose device sign-in (/api/device/start not found) \u2014 the Kanon instance is too old or the URL is wrong"
       };
     }
     return { ok: false, error: r.error, guidance: r.guidance };
@@ -19590,7 +20094,7 @@ async function setupBegin(serverUrl, deps) {
     return {
       ok: false,
       error: "unexpected response from /api/device/start",
-      guidance: "this server doesn't expose device sign-in \u2014 the Canonize instance is too old or the URL is wrong"
+      guidance: "this server doesn't expose device sign-in \u2014 the Kanon instance is too old or the URL is wrong"
     };
   }
   const startedMs = deps.now();
@@ -19623,7 +20127,7 @@ async function setupPoll({ maxWaitSeconds = 20 }, deps) {
   if (!pending) {
     return {
       status: "no_pending",
-      guidance: "no sign-in is in progress \u2014 run canonize_setup_begin (or /canonize:setup) first"
+      guidance: "no sign-in is in progress \u2014 run kanon_setup_begin (or /kanon:setup) first"
     };
   }
   for (; ; ) {
@@ -19655,7 +20159,7 @@ async function setupPoll({ maxWaitSeconds = 20 }, deps) {
         return {
           status: "error",
           error: `signed in, but could not save the credential: ${msg(e)}`,
-          guidance: "the token is issued exactly once and is now spent \u2014 run /canonize:setup again to restart sign-in. Check permissions on ~/.canonize."
+          guidance: "the token is issued exactly once and is now spent \u2014 run /kanon:setup again to restart sign-in. Check permissions on ~/.kanon."
         };
       }
     }
@@ -19663,14 +20167,14 @@ async function setupPoll({ maxWaitSeconds = 20 }, deps) {
       clearPending(deps.env);
       return {
         status: "denied",
-        guidance: "the sign-in was denied in the browser \u2014 run /canonize:setup again to retry with a fresh code"
+        guidance: "the sign-in was denied in the browser \u2014 run /kanon:setup again to retry with a fresh code"
       };
     }
     if (r.status === "expired") {
       clearPending(deps.env);
       return {
         status: "expired",
-        guidance: "the code expired before it was approved \u2014 run /canonize:setup again for a fresh code"
+        guidance: "the code expired before it was approved \u2014 run /kanon:setup again for a fresh code"
       };
     }
     if (deps.now() >= deadline) {
@@ -19701,14 +20205,14 @@ async function whoamiDetailed(deps) {
   if (!cfg2.url) {
     return {
       ok: false,
-      error: "no server URL \u2014 run /canonize:setup",
+      error: "no server URL \u2014 run /kanon:setup",
       config
     };
   }
   if (!cfg2.token) {
     return {
       ok: false,
-      error: "not signed in \u2014 run /canonize:setup",
+      error: "not signed in \u2014 run /kanon:setup",
       config
     };
   }
@@ -19817,12 +20321,12 @@ function text(payload, isError = false) {
 function apiConfig(config) {
   if (!config.url) {
     return {
-      missing: "no server URL \u2014 run /canonize:setup (or set CANONIZE_URL / .canonize/config.json)"
+      missing: "no server URL \u2014 run /kanon:setup (or set KANON_URL / .kanon/config.json)"
     };
   }
   if (!config.token) {
     return {
-      missing: "not signed in \u2014 run /canonize:setup (CI: CANONIZE_API_TOKEN)"
+      missing: "not signed in \u2014 run /kanon:setup (CI: KANON_API_TOKEN)"
     };
   }
   return { url: config.url, token: config.token };
@@ -19831,19 +20335,19 @@ function repoSlugOrError(config, passed) {
   const slug = passed ?? readProjectConfig(process.cwd()).repoSlug ?? config.repoSlug;
   if (!slug) {
     return {
-      missing: "no repoSlug \u2014 run /canonize:setup, pass one, or set it in .canonize/config.json"
+      missing: "no repoSlug \u2014 run /kanon:setup, pass one, or set it in .kanon/config.json"
     };
   }
   return slug;
 }
-var server = new McpServer({ name: "canonize-api", version: VERSION });
+var server = new McpServer({ name: "kanon-api", version: VERSION });
 server.registerTool(
-  "canonize_setup_begin",
+  "kanon_setup_begin",
   {
-    title: "Begin Canonize sign-in",
-    description: "Start device-authorization sign-in to a Canonize server. Returns a short user code and a verify URL to approve in a browser (sign-up and workspace creation happen there). The device secret is stored in a local file and never returned to the model. Follow with canonize_setup_poll to await approval.",
+    title: "Begin Kanon sign-in",
+    description: "Start device-authorization sign-in to a Kanon server. Returns a short user code and a verify URL to approve in a browser (sign-up and workspace creation happen there). The device secret is stored in a local file and never returned to the model. Follow with kanon_setup_poll to await approval.",
     inputSchema: {
-      serverUrl: external_exports.string().describe("The Canonize server URL, e.g. http://localhost:3000")
+      serverUrl: external_exports.string().describe("The Kanon server URL, e.g. http://localhost:3000")
     }
   },
   async ({ serverUrl }) => {
@@ -19856,10 +20360,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_setup_poll",
+  "kanon_setup_poll",
   {
-    title: "Poll Canonize sign-in for approval",
-    description: 'Wait for the in-flight sign-in to be approved in the browser, up to maxWaitSeconds. On approval the token is written to ~/.canonize/credentials.json (0600) and is NEVER included in the response \u2014 only the workspace and token name. Call again to keep waiting (status:"pending") until approved/denied/expired.',
+    title: "Poll Kanon sign-in for approval",
+    description: 'Wait for the in-flight sign-in to be approved in the browser, up to maxWaitSeconds. On approval the token is written to ~/.kanon/credentials.json (0600) and is NEVER included in the response \u2014 only the workspace and token name. Call again to keep waiting (status:"pending") until approved/denied/expired.',
     inputSchema: {
       maxWaitSeconds: external_exports.number().int().min(0).max(25).optional().describe("Seconds to block waiting for approval (0..25, default 20)")
     }
@@ -19874,10 +20378,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_whoami",
+  "kanon_whoami",
   {
-    title: "Canonize identity & config sources",
-    description: "Report which workspace the current token belongs to and WHERE each config field (url, token, repoSlug) was resolved from \u2014 so a shell CANONIZE_API_TOKEN shadowing a fresh sign-in is visible. Never reads or returns the token value.",
+    title: "Kanon identity & config sources",
+    description: "Report which workspace the current token belongs to and WHERE each config field (url, token, repoSlug) was resolved from \u2014 so a shell KANON_API_TOKEN shadowing a fresh sign-in is visible. Never reads or returns the token value.",
     inputSchema: {},
     annotations: { readOnlyHint: true }
   },
@@ -19891,10 +20395,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_validate_bundle",
+  "kanon_validate_bundle",
   {
-    title: "Validate a Canonize bundle",
-    description: "Validate a bundle.json against the Canonize bundle schema. Returns validity, the first schema violations, and bundle stats.",
+    title: "Validate a Kanon bundle",
+    description: "Validate a bundle.json against the Kanon bundle schema. Returns validity, the first schema violations, and bundle stats.",
     inputSchema: {
       path: external_exports.string().describe("Path to bundle.json (absolute or CWD-relative)")
     },
@@ -19913,10 +20417,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_assemble_bundle",
+  "kanon_assemble_bundle",
   {
     title: "Assemble a bundle from a crawl run directory",
-    description: "Mechanically fold a .canonize/runs/<stamp>/ directory (manifest.json + screens/*.json + transitions.jsonl + proposal.json) into a validated bundle.json: dedups screens, computes url templates and ids, resolves transitions, stamps agent metadata. Never edit bundle.json by hand \u2014 fix the run files and re-run this.",
+    description: "Mechanically fold a .kanon/runs/<stamp>/ directory (manifest.json + screens/*.json + transitions.jsonl + proposal.json) into a validated bundle.json: dedups screens, computes url templates and ids, resolves transitions, stamps agent metadata. Never edit bundle.json by hand \u2014 fix the run files and re-run this.",
     inputSchema: {
       runDir: external_exports.string().describe("Path to the crawl run directory"),
       repoSlug: external_exports.string().optional().describe("Overrides manifest/config"),
@@ -19957,10 +20461,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_push_bundle",
+  "kanon_push_bundle",
   {
-    title: "Push a bundle to Canonize",
-    description: "Validate and POST a bundle.json to the Canonize server's /api/ingest. The taxonomy lands as PROPOSALS for human review \u2014 nothing is published directly. Returns run ids, counts, and the review URL.",
+    title: "Push a bundle to Kanon",
+    description: "Validate and POST a bundle.json to the Kanon server's /api/ingest. The taxonomy lands as PROPOSALS for human review \u2014 nothing is published directly. Returns run ids, counts, and the review URL.",
     inputSchema: {
       path: external_exports.string().describe("Path to bundle.json"),
       repoSlug: external_exports.string().optional().describe("Overrides the bundle's own meta.repoSlug")
@@ -19993,10 +20497,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_get_taxonomy",
+  "kanon_get_taxonomy",
   {
-    title: "Get the Canonize taxonomy state",
-    description: "Fetch the repo's taxonomy from the Canonize server: approved structure (what a shaped crawl must conform to), current proposals, and spaces. Fetching an unclaimed slug CLAIMS it into your token's workspace; a slug owned by another workspace returns 404. Degrade gracefully if unreachable \u2014 discovery then runs fresh.",
+    title: "Get the Kanon taxonomy state",
+    description: "Fetch the repo's taxonomy from the Kanon server: approved structure (what a shaped crawl must conform to), current proposals, and spaces. Fetching an unclaimed slug CLAIMS it into your token's workspace; a slug owned by another workspace returns 404. Degrade gracefully if unreachable \u2014 discovery then runs fresh.",
     inputSchema: {
       repoSlug: external_exports.string().optional(),
       view: external_exports.enum(["compact", "full"]).optional().describe(
@@ -20016,9 +20520,9 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_ingest_status",
+  "kanon_ingest_status",
   {
-    title: "Recent Canonize ingest runs",
+    title: "Recent Kanon ingest runs",
     description: `List the repo's recent discovery/ingest runs (newest first) \u2014 did the last push land, what did it propose. Agent-produced runs carry stats.source === "agent".`,
     inputSchema: {
       repoSlug: external_exports.string().optional()
@@ -20036,7 +20540,7 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_approve_all",
+  "kanon_approve_all",
   {
     title: "Auto-approve all proposed taxonomy nodes",
     description: "Bulk-approve every proposed taxonomy node for the repo. This is the autonomous pipeline path \u2014 skips the human review UI. Each approval materializes the node into the rendering baseline (domains \u2192 BehavioralDomain rows, features \u2192 Feature rows with boundaries). Use with care: normally proposals go through human review at the /discovery/<repoSlug> page.",
@@ -20055,7 +20559,7 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_select_files",
+  "kanon_select_files",
   {
     title: "Select a feature's files to research",
     description: "Turn a feature's boundary globs into the file set to research: seed by glob over ALL repo files, expand through the REAL import graph, drop tests, and prune generic plumbing. Writes files.json (with per-file contentHash, seed/entryPoint flags) into the run dir. Non-TS/JS repos report closureUnavailable \u2014 the skill widens the seed with grep. The MODEL never picks these files; this does.",
@@ -20098,7 +20602,7 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_collect_facts",
+  "kanon_collect_facts",
   {
     title: "Collect deterministic facts for a scan",
     description: "Run the REAL server fact collector over the run dir's selected closure (files.json) \u2014 DB tables, enum values, routes, cron, constants, feature flags, analytics events \u2014 and write facts.json. These are the guide's fact surface; the research references them but never restates them as tables. The MODEL never authors facts; this does.",
@@ -20115,7 +20619,7 @@ server.registerTool(
       const filesPath = join14(dir, "files.json");
       if (!existsSync5(filesPath)) {
         return text(
-          { error: "no files.json \u2014 run canonize_select_files first" },
+          { error: "no files.json \u2014 run kanon_select_files first" },
           true
         );
       }
@@ -20152,10 +20656,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_assemble_guide",
+  "kanon_assemble_guide",
   {
     title: "Assemble / gate a feature guide",
-    description: "The grounding gate for /canonize:scan. `check` selects the stage: 'schema' returns the contract (a full + minimal example per run artifact) and needs no runDir \u2014 call it BEFORE writing if you want the shape up front; 'freshness' (+storedInputHash from canonize_get_guide_status) answers unchanged:true/false so you can skip research on an unchanged feature; 'aspects' materializes aspect filePaths + priorityFiles and warns about unassigned entry points; 'dive' (+aspectKey) enforces priority-file reading and \u226580% grounded paragraphs against that aspect's own claims/readlog, bouncing with specifics; 'merge' folds the per-aspect claims/<key>.jsonl + readlog/<key>.jsonl that parallel aspect workers wrote into the flat claims.jsonl + readlog.jsonl (first-wins dedup); 'synthesis'/'front-matter' shape-check; 'full' resolves rule keys to indices, drops principles spanning <2 aspects, and writes+validates guide-bundle.json. A shape rejection always carries the required keys and a working example, so you never need a second call to learn the contract. Never hand-edit the bundle \u2014 fix the run artifacts and re-run.",
+    description: "The grounding gate for /kanon:scan. `check` selects the stage: 'schema' returns the contract (a full + minimal example per run artifact) and needs no runDir \u2014 call it BEFORE writing if you want the shape up front; 'freshness' (+storedInputHash from kanon_get_guide_status) answers unchanged:true/false so you can skip research on an unchanged feature; 'aspects' materializes aspect filePaths + priorityFiles and warns about unassigned entry points; 'dive' (+aspectKey) enforces priority-file reading and \u226580% grounded paragraphs against that aspect's own claims/readlog, bouncing with specifics; 'merge' folds the per-aspect claims/<key>.jsonl + readlog/<key>.jsonl that parallel aspect workers wrote into the flat claims.jsonl + readlog.jsonl (first-wins dedup); 'synthesis'/'front-matter' shape-check; 'full' resolves rule keys to indices, drops principles spanning <2 aspects, and writes+validates guide-bundle.json. A shape rejection always carries the required keys and a working example, so you never need a second call to learn the contract. Never hand-edit the bundle \u2014 fix the run artifacts and re-run.",
     inputSchema: {
       runDir: external_exports.string().optional().describe("The scan run directory. Not needed for check:'schema'."),
       check: external_exports.enum([
@@ -20170,7 +20674,7 @@ server.registerTool(
       ]).describe("Which gate to run"),
       aspectKey: external_exports.string().optional().describe("Required for check:'dive'"),
       storedInputHash: external_exports.string().optional().describe(
-        "check:'freshness' only \u2014 the inputHash canonize_get_guide_status returned for this feature. Given it, freshness answers a definitive unchanged:true/false."
+        "check:'freshness' only \u2014 the inputHash kanon_get_guide_status returned for this feature. Given it, freshness answers a definitive unchanged:true/false."
       ),
       artifact: external_exports.enum([
         "manifest",
@@ -20220,9 +20724,9 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_push_guide",
+  "kanon_push_guide",
   {
-    title: "Push a feature guide to Canonize",
+    title: "Push a feature guide to Kanon",
     description: "POST a validated guide-bundle.json to /api/guide. The server hashes the closure and returns skipped:true when nothing changed, else ingests the guide as proposals for review. 404 means the FEATURE isn't approved. Returns run id, claim counts, and the review URL.",
     inputSchema: {
       path: external_exports.string().describe("Path to guide-bundle.json"),
@@ -20255,10 +20759,10 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_push_tests",
+  "kanon_push_tests",
   {
-    title: "Push per-test coverage to Canonize",
-    description: "Merge the per-worker coverage shards your Istanbul-instrumented suite left in .canonize/coverage and POST them to /api/tests. Only run this after the suite passed (green) \u2014 every recorded test is treated as passing. The server replaces the repo's coverage snapshot and re-links its claims, returning how many are now Verified. Wire the collector into CI with /canonize:setup-ci.",
+    title: "Push per-test coverage to Kanon",
+    description: "Merge the per-worker coverage shards your Istanbul-instrumented suite left in .kanon/coverage and POST them to /api/tests. Only run this after the suite passed (green) \u2014 every recorded test is treated as passing. The server replaces the repo's coverage snapshot and re-links its claims, returning how many are now Verified. Wire the collector into CI with /kanon:setup-ci.",
     inputSchema: {
       repoSlug: external_exports.string().optional().describe("Overrides the configured repo slug")
     }
@@ -20276,7 +20780,7 @@ server.registerTool(
       if (raws.length === 0) {
         return text(
           {
-            error: `no coverage shards in ${shardDir} \u2014 run your suite with the canonize setup file and Istanbul coverage first (see /canonize:setup-ci)`
+            error: `no coverage shards in ${shardDir} \u2014 run your suite with the kanon setup file and Istanbul coverage first (see /kanon:setup-ci)`
           },
           true
         );
@@ -20302,7 +20806,7 @@ server.registerTool(
   }
 );
 server.registerTool(
-  "canonize_get_guide_status",
+  "kanon_get_guide_status",
   {
     title: "Guide freshness for a feature",
     description: "Fetch the server's stored input hash + latest run for a feature (GET /api/guide) \u2014 used before researching to offer skipping a guide whose closure hasn't changed.",
@@ -20324,6 +20828,50 @@ server.registerTool(
       domainKey,
       featureKey
     });
+    return text(result, !result.ok);
+  }
+);
+server.registerTool(
+  "kanon_list_changes",
+  {
+    title: "List pending product changes",
+    description: "Fetch open/implementing spec changes (product change requests) for the repo. Use to find the next actionable change for /kanon:work. Filter by Linear ticket ID.",
+    inputSchema: {
+      repoSlug: external_exports.string().optional(),
+      linearId: external_exports.string().optional().describe("Filter by Linear ticket identifier (e.g. ENG-42)"),
+      status: external_exports.string().optional().describe("Comma-separated statuses: open,implementing (default: open,implementing)"),
+      limit: external_exports.number().optional().describe("Max changes to return (default: 10)")
+    },
+    annotations: { readOnlyHint: true }
+  },
+  async ({ repoSlug, linearId, status, limit }) => {
+    const config = cfg();
+    const api = apiConfig(config);
+    if ("missing" in api) return text({ error: api.missing }, true);
+    const slug = repoSlugOrError(config, repoSlug);
+    if (typeof slug !== "string") return text({ error: slug.missing }, true);
+    const result = await listChanges(api, slug, { linearId, status, limit });
+    return text(result, !result.ok);
+  }
+);
+server.registerTool(
+  "kanon_update_change",
+  {
+    title: "Update a spec change status",
+    description: "Set a spec change to implementing (starting work), resolved (done), or dismissed. Use at the start and end of /kanon:work.",
+    inputSchema: {
+      repoSlug: external_exports.string().optional(),
+      changeId: external_exports.string().describe("The spec change ID"),
+      status: external_exports.enum(["implementing", "resolved", "dismissed"]).describe("The new status")
+    }
+  },
+  async ({ repoSlug, changeId, status }) => {
+    const config = cfg();
+    const api = apiConfig(config);
+    if ("missing" in api) return text({ error: api.missing }, true);
+    const slug = repoSlugOrError(config, repoSlug);
+    if (typeof slug !== "string") return text({ error: slug.missing }, true);
+    const result = await updateChangeStatus(api, slug, changeId, status);
     return text(result, !result.ok);
   }
 );

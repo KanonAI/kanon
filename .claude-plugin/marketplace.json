@@ -1,18 +1,18 @@
 {
-  "name": "canonize",
+  "name": "kanon",
   "owner": {
-    "name": "Canonize",
+    "name": "Kanon",
     "email": "ejunior@every.io"
   },
-  "description": "Canonize customer-side tooling: app discovery from your own Claude Code session",
+  "description": "Kanon customer-side tooling: app discovery from your own Claude Code session",
   "plugins": [
     {
-      "name": "canonize",
+      "name": "kanon",
       "source": ".",
-      "description": "Analyze your web app's codebase into a capability taxonomy — optionally refined by a Claude in Chrome crawl — and push it to Canonize for review",
+      "description": "Analyze your web app's codebase into a capability taxonomy — optionally refined by a Claude in Chrome crawl — and push it to Kanon for review",
       "category": "productivity",
       "keywords": [
-        "canonize",
+        "kanon",
         "discovery",
         "knowledge-base",
         "crawl"

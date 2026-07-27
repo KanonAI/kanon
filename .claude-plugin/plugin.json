@@ -1,32 +1,32 @@
 {
-  "name": "canonize",
-  "displayName": "Canonize",
-  "version": "0.10.1",
-  "description": "Turn your web app into a verified knowledge base: /canonize:setup signs you in, /canonize:discover maps it from your codebase (--refine also crawls it with Claude in Chrome), /canonize:scan generates grounded feature guides from your code, /canonize:push sends taxonomy to Canonize for review, and /canonize:setup-ci wires per-test coverage from your CI so passing tests verify the claims",
+  "name": "kanon",
+  "displayName": "Kanon",
+  "version": "0.11.0",
+  "description": "Turn your web app into a verified knowledge base: /kanon:setup signs you in, /kanon:discover maps it from your codebase (--refine also crawls it with Claude in Chrome), /kanon:scan generates grounded feature guides from your code, /kanon:push sends taxonomy to Kanon for review, /kanon:setup-ci wires per-test coverage from your CI so passing tests verify the claims, and /kanon:work picks up the next pending product change and implements it as a review-ready PR",
   "author": {
-    "name": "Canonize",
+    "name": "Kanon",
     "email": "ejunior@every.io"
   },
-  "repository": "https://github.com/CanonizeAI/canonize",
+  "repository": "https://github.com/KanonAI/kanon",
   "license": "UNLICENSED",
   "keywords": ["discovery", "crawl", "knowledge-base"],
   "userConfig": {
     "server_url": {
       "type": "string",
-      "title": "Canonize server URL",
-      "description": "Optional — /canonize:setup configures this; set only to override. Your Canonize instance, e.g. https://canonize.example.com (http://localhost:3000 for local dev). Can also come from CANONIZE_URL or .canonize/config.json.",
+      "title": "Kanon server URL",
+      "description": "Optional — /kanon:setup configures this; set only to override. Your Kanon instance, e.g. https://kanon.example.com (http://localhost:3000 for local dev). Can also come from KANON_URL or .kanon/config.json.",
       "default": ""
     },
     "api_token": {
       "type": "string",
-      "title": "Canonize API token",
-      "description": "Optional — /canonize:setup signs you in and stores the token in ~/.canonize/credentials.json; set this only to override with a CI/machine token. Can also come from CANONIZE_API_TOKEN.",
+      "title": "Kanon API token",
+      "description": "Optional — /kanon:setup signs you in and stores the token in ~/.kanon/credentials.json; set this only to override with a CI/machine token. Can also come from KANON_API_TOKEN.",
       "sensitive": true
     },
     "repo_slug": {
       "type": "string",
       "title": "Default repo slug",
-      "description": "Optional — /canonize:setup writes the repo slug into the project's .canonize/config.json; set this only to override with a global owner/repo default.",
+      "description": "Optional — /kanon:setup writes the repo slug into the project's .kanon/config.json; set this only to override with a global owner/repo default.",
       "default": ""
     }
   }

@@ -34,7 +34,7 @@ it). `check:merge` unions them later.
 Don't wait until the end. The moment you understand a behavioral rule, append it
 to your `claims/<aspectKey>.jsonl` (one JSON object per line):
 
-<!-- canonize:example schema=claim -->
+<!-- kanon:example schema=claim -->
 ```json
 {"statement":"A card is declined when the account balance is below the pending authorization amount","codeAnchor":"src/services/card-service.ts::authorize","normalizedRuleKey":"card-declined-insufficient-balance","sourcePath":"src/services/card-service.ts","sourceLine":142}
 ```
@@ -58,7 +58,7 @@ One file per resolved aspect. Every `paragraph` and every `flow step` carries
 `ruleRefs` (rule KEY strings — assembly maps them to symbolic indices) and/or
 `anchors` (`"path:line"`). Shape:
 
-<!-- canonize:example schema=dive -->
+<!-- kanon:example schema=dive -->
 ```json
 {
   "aspectKey": "risk-controls",
@@ -137,7 +137,7 @@ a chosen date, a fictional customer name.
 
 ## Responding to a dive bounce
 
-Run `canonize_assemble_guide { check:"dive", aspectKey:"<key>" }`. If it
+Run `kanon_assemble_guide { check:"dive", aspectKey:"<key>" }`. If it
 bounces, it tells you exactly why:
 
 | Bounce | Meaning | Fix |
