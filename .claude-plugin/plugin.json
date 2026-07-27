@@ -1,7 +1,7 @@
 {
   "name": "kanon",
   "displayName": "Kanon",
-  "version": "0.11.0",
+  "version": "0.13.0",
   "description": "Turn your web app into a verified knowledge base: /kanon:setup signs you in, /kanon:discover maps it from your codebase (--refine also crawls it with Claude in Chrome), /kanon:scan generates grounded feature guides from your code, /kanon:push sends taxonomy to Kanon for review, /kanon:setup-ci wires per-test coverage from your CI so passing tests verify the claims, and /kanon:work picks up the next pending product change and implements it as a review-ready PR",
   "author": {
     "name": "Kanon",

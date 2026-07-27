@@ -18284,10 +18284,82 @@ function lineAt(text2, index2) {
   return line;
 }
 
+// ../../../src/infrastructure/facts/blank-comments.ts
+function blankComments(source) {
+  const out = source.split("");
+  const n = source.length;
+  let prevSignificant = "";
+  const blankBlock = (from, i, close) => {
+    void from;
+    const end = source.indexOf(close, i + 2);
+    const stop = end === -1 ? n : end + close.length;
+    for (let j = i; j < stop; j++) if (source[j] !== "\n") out[j] = " ";
+    return stop;
+  };
+  for (let i = 0; i < n; ) {
+    const ch = source[i];
+    const pair = ch + (source[i + 1] ?? "");
+    if (pair === "//") {
+      let j = i;
+      while (j < n && source[j] !== "\n") out[j++] = " ";
+      i = j;
+      continue;
+    }
+    if (pair === "/*") {
+      i = blankBlock("/*", i, "*/");
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      i++;
+      while (i < n) {
+        if (source[i] === "\\") {
+          i += 2;
+          continue;
+        }
+        if (source[i] === ch) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      prevSignificant = ch;
+      continue;
+    }
+    if (ch === "/" && regexAllowedAfter(prevSignificant)) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < n) {
+        const c = source[j];
+        if (c === "\\") {
+          j += 2;
+          continue;
+        }
+        if (c === "[") inClass = true;
+        else if (c === "]") inClass = false;
+        else if (c === "/" && !inClass) {
+          j++;
+          break;
+        } else if (c === "\n") break;
+        j++;
+      }
+      i = j;
+      prevSignificant = "/";
+      continue;
+    }
+    if (!/\s/.test(ch)) prevSignificant = ch;
+    i++;
+  }
+  return out.join("");
+}
+function regexAllowedAfter(prev) {
+  return prev === "" || "([{,;:=!&|?+-*%^~<>".includes(prev);
+}
+
 // ../../../src/infrastructure/facts/extract-express-routes.ts
 var OPEN_RE = /app\.(get|post|put|patch|delete)\(/g;
 var DEDICATED = /* @__PURE__ */ new Set(["session", "role", "roles", "authorize"]);
-function expressRouteFacts(path, source, cap = 120) {
+function expressRouteFacts(path, rawSource, cap = 120) {
+  const source = blankComments(rawSource);
   const facts = [];
   OPEN_RE.lastIndex = 0;
   let m;
@@ -18470,9 +18542,10 @@ function extractCodeFacts(path, source) {
   const parameters = [];
   const flagSites = [];
   const events = [];
+  const scan = blankComments(source);
   CONST_RE.lastIndex = 0;
   let m;
-  while ((m = CONST_RE.exec(source)) !== null) {
+  while ((m = CONST_RE.exec(scan)) !== null) {
     const [, name, rhs] = m;
     const envVar = /(?:\benv|process\.env)\.([A-Z0-9_]+)/.exec(rhs)?.[1];
     const value = literalValue(rhs);
@@ -18488,7 +18561,7 @@ function extractCodeFacts(path, source) {
   const seenFlags = /* @__PURE__ */ new Set();
   for (const re of [FLAG_MEMBER_RE, FLAG_CALL_RE]) {
     re.lastIndex = 0;
-    while ((m = re.exec(source)) !== null) {
+    while ((m = re.exec(scan)) !== null) {
       const site = `${m[1]}@${m.index}`;
       if (seenFlags.has(site)) continue;
       seenFlags.add(site);
@@ -18503,7 +18576,7 @@ function extractCodeFacts(path, source) {
   const seen = /* @__PURE__ */ new Set();
   for (const re of [EVENT_MEMBER_RE, EVENT_TRACK_RE, EVENT_CALL_RE]) {
     re.lastIndex = 0;
-    while ((m = re.exec(source)) !== null) {
+    while ((m = re.exec(scan)) !== null) {
       const event = m[1];
       if (seen.has(event)) continue;
       seen.add(event);
@@ -18526,7 +18599,7 @@ function extractCodeFacts(path, source) {
   const seenExperiments = /* @__PURE__ */ new Set();
   for (const re of [EXPERIMENT_CALL_RE, EXPERIMENT_AB_RE, EXPERIMENT_LD_RE]) {
     re.lastIndex = 0;
-    while ((m = re.exec(source)) !== null) {
+    while ((m = re.exec(scan)) !== null) {
       const name = m[1];
       if (seenExperiments.has(name)) continue;
       seenExperiments.add(name);
@@ -20063,15 +20136,15 @@ async function buildSelectedFiles(graph, paths, seedSet, entryPoints, prunedSet,
 function msg(e) {
   return e instanceof Error ? e.message : String(e);
 }
+var DEFAULT_SERVER_URL = "https://www.gokanon.com";
+function resolveServerUrl(raw) {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return DEFAULT_SERVER_URL;
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  return normalizeUrl(withScheme);
+}
 async function setupBegin(serverUrl, deps) {
-  const url = normalizeUrl(serverUrl ?? "");
-  if (!url) {
-    return {
-      ok: false,
-      error: "no server URL given",
-      guidance: "pass the Kanon server URL, e.g. http://localhost:3000"
-    };
-  }
+  const url = resolveServerUrl(serverUrl);
   const r = await deviceStart(url);
   if (!r.ok) {
     if (r.status === 0) {
@@ -20347,7 +20420,9 @@ server.registerTool(
     title: "Begin Kanon sign-in",
     description: "Start device-authorization sign-in to a Kanon server. Returns a short user code and a verify URL to approve in a browser (sign-up and workspace creation happen there). The device secret is stored in a local file and never returned to the model. Follow with kanon_setup_poll to await approval.",
     inputSchema: {
-      serverUrl: external_exports.string().describe("The Kanon server URL, e.g. http://localhost:3000")
+      serverUrl: external_exports.string().optional().describe(
+        "The Kanon server URL. Omit to use the default (https://www.gokanon.com); pass only to target a different instance, e.g. http://localhost:3000 for local dev."
+      )
     }
   },
   async ({ serverUrl }) => {

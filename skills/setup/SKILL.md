@@ -5,7 +5,7 @@ description: >
   configure this project so /kanon:discover can run. Use for "set up
   kanon", "connect kanon", "sign in to kanon", "onboard this
   project", "get started with kanon".
-argument-hint: "[server-url]"
+argument-hint: "[--host <url>]"
 disable-model-invocation: true
 ---
 
@@ -70,11 +70,14 @@ workspace and the token's *source*, never its value.
 
 ## 2. Server URL
 
-Use `$ARGUMENTS` if given, else `AskUserQuestion` for the Kanon server URL
-(suggest `http://localhost:3000` for local dev; note real instances are
-`https://…`). Do NOT probe with curl — the reachability probe **is** §3's
-`kanon_setup_begin`. If begin fails, show the actionable error and re-ask
-here; never silently re-loop.
+**Default to `https://www.gokanon.com` — do NOT ask.** The only override is a
+`--host` flag in `$ARGUMENTS` (`--host <url>` or `--host=<url>`); use that value
+instead when present (a bare host like `localhost:3000` gets `https://`
+assumed, so pass `http://localhost:3000` for local dev). Ignore any bare
+positional argument — only `--host` switches the server. Do NOT probe with
+curl — the reachability probe **is** §3's `kanon_setup_begin`. If begin fails,
+show the actionable error and, only then, suggest a corrected `--host`; never
+silently re-loop and never fall back to prompting for the URL.
 
 As soon as the URL is confirmed (i.e. §3's begin succeeds), **write it into
 `.kanon/config.json`** (`{ "url": … }`, merging with any existing file).
@@ -84,9 +87,12 @@ server it talks to.
 
 ## 3. Sign in & approve
 
-1. Call `kanon_setup_begin { serverUrl }`.
+1. Call `kanon_setup_begin`. Pass `{ serverUrl }` **only** when §2 found a
+   `--host` override; otherwise call it with no arguments so it targets the
+   default `https://www.gokanon.com`.
    - Failure → surface the `guidance` (typo, server down, http-vs-https, VPN, or
-     "too old / wrong URL" for a 404) and go back to §2.
+     "too old / wrong URL" for a 404) and go back to §2 (re-check the `--host`,
+     or note the default instance is unreachable).
    - Success → you get `verifyUrl`, `userCode`, `expiresInSeconds`,
      `pollIntervalSeconds`.
 2. Present the approval clearly:
@@ -161,8 +167,8 @@ the codebase; no browser opens unless they ask for `--refine`.
 |---|---|
 | `node --version` < 20 / missing | ❌ stop; install Node 20 LTS (nvm or nodejs.org), re-run. |
 | Claude in Chrome absent | ✅ not blocking — discovery is code-only by default; the extension is only needed for `/kanon:discover --refine`. |
-| `setup_begin` unreachable (status 0) | Typo / server down / http-vs-https / VPN. Fix and re-ask in §2. |
-| `setup_begin` 404 or HTML | Server has no device sign-in — too old or wrong URL. Re-ask §2. |
+| `setup_begin` unreachable (status 0) | Typo / server down / http-vs-https / VPN, or the default instance is down. Retry, or pass a corrected `--host` (§2). |
+| `setup_begin` 404 or HTML | Server has no device sign-in — too old or wrong URL. Pass the right `--host` (§2). |
 | `poll` denied | User rejected in browser. Restart only on request. |
 | `poll` expired | ONE auto-restart with a new code (announce it), then poll. |
 | `poll` error ×3 | Stop; pending is kept; check connectivity; re-run to resume. |

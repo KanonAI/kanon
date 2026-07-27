@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.13.0 — 2026-07-27
+
+**`collect_facts` output always passes `assemble_guide check:"full"`.** During a
+`/kanon:scan` fleet run, feature workers hit a wall: the fact collector emits
+`security` and `experiment` facts, plus enrichment keys on `flag`/`event`
+(`provider`, `category`, …), that the guide-bundle schema had no variant for —
+so assembly rejected them with hundreds of Zod issues and each worker had to
+hand-delete fact entries from `facts.json` before it could pass. The wire
+`FactSchema` now mirrors the domain fact model exactly; the two tools agree on
+one contract, verified by a round-trip test and a compile-time parity pin over
+the fact kinds.
+
+- **No more comment-mined facts.** The route/flag/event/experiment extractors
+  now blank comments before scanning, so a JSDoc example like
+  `app.post('/orders/submit', …)` or `analytics.track('order_refunded')` is
+  never mined as a real fact — the worst offender being the collector's own
+  extractor sources when Kanon scans Kanon.
+
 ## 0.10.1 — 2026-07-25
 
 **Published from a dedicated public marketplace.** The plugin now ships from
