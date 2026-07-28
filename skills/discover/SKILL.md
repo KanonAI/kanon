@@ -319,7 +319,8 @@ human decides they're right. Never skip this without the user's explicit
 | `--refine` passed, Claude in Chrome absent | ⚠️ fall back to code-only, say so, and note that `--refine` works once the extension is connected. Never skip the run. |
 | `kanon_*` MCP tools missing (`--plugin-dir` dev) | Use the CLI twin at `${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js` for assemble/validate; fetch taxonomy with curl (§1.5). |
 | `get_taxonomy` unreachable | Continue in fresh mode — the bundle pushes later. Say which mode you ended up in. |
-| `get_taxonomy` 404 | Slug owned by another workspace — pick another, or re-run `/kanon:setup` as the account that owns it. |
+| `get_taxonomy` 404 | Slug owned by another workspace — never "not created yet", since an unclaimed slug is auto-claimed by the fetch. Pick another, move the repo in the app, or re-run `/kanon:setup` as the owning account. |
+| Any call reports `redirectedTo` | The configured host redirects, and the hop strips the auth header. Set `url` in `.kanon/config.json` to the reported value, then re-run `/kanon:setup`. |
 | A mapper delivers nothing / goes idle | Its final message *was* the report. Re-ask ONCE with the return contract restated; if it's still empty, map that area yourself. |
 | Assemble reports the bundle invalid | Fix `proposal.json` or the screen records and re-assemble. **Never hand-edit `bundle.json`.** |
 | Assemble rejects `crawl` evidence with zero screens | Code-only mode has no screens — re-source that evidence as `route`/`nav`/`module`. |

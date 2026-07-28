@@ -79,11 +79,17 @@ curl — the reachability probe **is** §3's `kanon_setup_begin`. If begin fails
 show the actionable error and, only then, suggest a corrected `--host`; never
 silently re-loop and never fall back to prompting for the URL.
 
-As soon as the URL is confirmed (i.e. §3's begin succeeds), **write it into
-`.kanon/config.json`** (`{ "url": … }`, merging with any existing file).
-This must happen BEFORE §4: the credentials store is keyed by server URL, so
-`kanon_whoami` can only find the fresh token once the project knows which
-server it talks to.
+As soon as §3's begin succeeds, **write the `serverUrl` it returned into
+`.kanon/config.json`** (`{ "url": … }`, merging with any existing file) —
+that exact string, never the one you passed in. They differ when the host
+redirects (apex→www, http→https), and `serverUrl` is the one the credential is
+filed under. This must happen BEFORE §4: the credentials store is keyed by
+server URL, so `kanon_whoami` can only find the fresh token once the project
+names the same URL.
+
+If the result carries `redirectedFrom`, say so plainly — *"`<redirectedFrom>`
+redirects to `<serverUrl>`; using the latter, since the redirect would drop the
+auth header"* — and use `serverUrl` everywhere from then on.
 
 ## 3. Sign in & approve
 
@@ -139,8 +145,12 @@ Call `kanon_whoami`.
    *fetching the taxonomy CLAIMS an unclaimed slug into your workspace.*
    - `exists: false` → the slug was just claimed fresh (empty taxonomy).
    - `exists: true` → summarize approved/proposed counts.
-   - **404** → the slug is owned by **another** workspace. Pick a different slug,
-     or re-run `/kanon:setup` signed in as the right account.
+   - **404** → **always** "owned by another workspace", never "not created
+     yet" — an unclaimed slug is auto-claimed by this very call, so it could
+     not have 404'd. Do not retry, and do not guess which workspace: offer the
+     three real options and let the user pick — *(a)* sign in as the owning
+     account, *(b)* move the repo to this workspace in the app (keeps its
+     existing taxonomy), *(c)* claim a different slug (starts empty).
 3. **Target app URL**: ask (staging/test tenant preferred over production).
    This is recorded as bundle metadata for every discovery run; it does not by
    itself cause a browser crawl. Optionally ask the role a `--refine` crawl
@@ -173,7 +183,9 @@ the codebase; no browser opens unless they ask for `--refine`.
 | `poll` expired | ONE auto-restart with a new code (announce it), then poll. |
 | `poll` error ×3 | Stop; pending is kept; check connectivity; re-run to resume. |
 | `whoami` shows non-credentials `tokenSource` after approval | A shell/keychain token is shadowing the sign-in. Unset it (§4). |
-| `get_taxonomy` 404 | Slug owned by another workspace — pick another or switch account. |
+| `get_taxonomy` 404 | Slug owned by another workspace (never "not created yet") — switch account, move the repo in the app, or pick another slug. |
+| Any call reports `redirectedTo` | The host redirects and the hop drops the auth header. Set `url` in `.kanon/config.json` to the reported value and re-run `/kanon:setup` so the credential is filed under it. |
+| `whoami` 401 with a token resolved | The stored credential was refused — it is revoked, or issued for a different server. Re-run `/kanon:setup`; clear any shell/keychain override first. |
 | `.kanon/config.json` write fails | Report the path + error; it's just JSON — offer to write it manually. |
 
 ## Resumability

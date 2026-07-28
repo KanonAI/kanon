@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.14.0 — 2026-07-27
+
+**A redirecting host no longer produces a sign-in that can never
+authenticate.** Pointing the plugin at `https://gokanon.com` (which 308s to
+`www.`) signed you in successfully and then answered `401` on every call
+afterwards — because `fetch` strips the `Authorization` header on a
+cross-origin redirect, and "cross-origin" includes the scheme, so a
+self-hosted `http://`→`https://` hop broke identically. The 401 was reported as
+"authentication failed — run /kanon:setup to sign in", which sent you back
+through the sign-in that had just worked, forever.
+
+- **Sign-in canonicalizes the host.** `kanon_setup_begin` now returns the
+  `serverUrl` the server actually answered on, files the credential under it,
+  and reports `redirectedFrom` when it differs. `/kanon:setup` writes that exact
+  value into `.kanon/config.json`, so the credential store and the project
+  config can no longer disagree — previously one host could accumulate two
+  credential entries, silently pointing at two different workspaces. Sub-path
+  installs (`https://host/kanon`) are preserved rather than flattened.
+- **Authed calls name the hop instead of its symptom.** Any redirect that would
+  strip the token now fails with the canonical URL to switch to, in
+  `redirectedTo`. Same-origin redirects, which keep the header, are untouched.
+- **`whoami` stops misreporting a rejected token as "not signed in."** When a
+  credential was resolved and refused, it now says so, names where the token
+  came from, and points at the shell/keychain override that may be shadowing it.
+- **The repo-slug 404 says what it means.** A workspace-scoped token auto-claims
+  an unclaimed slug, so a 404 is never "not created yet" — it is always "owned
+  by another workspace". The guidance now says that outright and lists moving
+  the repo as an option, alongside switching account or picking a new slug.
+
 ## 0.13.0 — 2026-07-27
 
 **`collect_facts` output always passes `assemble_guide check:"full"`.** During a

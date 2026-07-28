@@ -12,13 +12,32 @@ import { join as join14, resolve as resolve2 } from "node:path";
 // src/api.ts
 var GUIDANCE = {
   401: "authentication failed \u2014 run /kanon:setup to sign in (CI/dogfood: check KANON_API_TOKEN)",
-  404: "repo slug not found or owned by another workspace \u2014 an unclaimed slug is claimed into your token's workspace on first taxonomy fetch/ingest; if it's claimed elsewhere, pick a different slug or run /kanon:setup with the right account",
+  404: "this slug belongs to a DIFFERENT workspace. A workspace-scoped token auto-claims an UNCLAIMED slug on first fetch/ingest, so a 404 is never 'not created yet' \u2014 it is always 'owned elsewhere'. Pick a different slug, move the repo to this workspace in the app, or run /kanon:setup as the account that owns it",
   413: "bundle too large \u2014 drop the transcript, or split the crawl into smaller runs"
 };
-async function request(target, method, path, body) {
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return void 0;
+  }
+}
+function baseFromFinalUrl(finalUrl, path) {
+  const pathname = path.split("?")[0];
+  try {
+    const u = new URL(finalUrl);
+    if (!u.pathname.endsWith(pathname)) return void 0;
+    const prefix = u.pathname.slice(0, u.pathname.length - pathname.length);
+    return `${u.origin}${prefix}`.replace(/\/$/, "");
+  } catch {
+    return void 0;
+  }
+}
+async function request(target, method, path, body, meta) {
+  const base = target.url.replace(/\/$/, "");
   let res;
   try {
-    res = await fetch(`${target.url.replace(/\/$/, "")}${path}`, {
+    res = await fetch(`${base}${path}`, {
       method,
       headers: {
         ...target.token ? { authorization: `Bearer ${target.token}` } : {},
@@ -32,6 +51,19 @@ async function request(target, method, path, body) {
       status: 0,
       error: `cannot reach ${target.url}: ${e instanceof Error ? e.message : String(e)}`,
       guidance: "check the server URL (KANON_URL / .kanon/config.json) and that the Kanon server is running; run /kanon:setup to (re)configure"
+    };
+  }
+  const landedBase = baseFromFinalUrl(res.url, path);
+  if (meta) meta.canonicalBase = landedBase;
+  const from = originOf(base);
+  const to = originOf(res.url);
+  if (target.token && from && to && from !== to) {
+    return {
+      ok: false,
+      status: res.status,
+      error: `${from} redirected to ${to}, which drops the Authorization header \u2014 the token never reached the server`,
+      guidance: `point Kanon at ${landedBase ?? to} instead: update "url" in .kanon/config.json (or KANON_URL), then re-run /kanon:setup so the credential is stored under that exact URL`,
+      redirectedTo: landedBase ?? to
     };
   }
   let json = void 0;
@@ -51,8 +83,17 @@ async function request(target, method, path, body) {
   }
   return { ok: true, ...json };
 }
-function deviceStart(url) {
-  return request({ url }, "POST", "/api/device/start", {});
+async function deviceStart(url) {
+  const meta = {};
+  const r = await request(
+    { url },
+    "POST",
+    "/api/device/start",
+    {},
+    meta
+  );
+  if (!r.ok) return r;
+  return { ...r, canonicalBase: meta.canonicalBase ?? url.replace(/\/$/, "") };
 }
 function devicePoll(url, deviceCode) {
   return request(
@@ -9585,10 +9626,12 @@ async function setupBegin(serverUrl, deps) {
       guidance: "this server doesn't expose device sign-in \u2014 the Kanon instance is too old or the URL is wrong"
     };
   }
+  const canonical = normalizeUrl(r.canonicalBase);
+  const redirected = canonical !== url;
   const startedMs = deps.now();
   writePending(deps.env, {
     version: 1,
-    serverUrl: url,
+    serverUrl: canonical,
     deviceCode: r.deviceCode,
     userCode: r.userCode,
     verifyUrl: r.verifyUrl,
@@ -9601,7 +9644,9 @@ async function setupBegin(serverUrl, deps) {
     verifyUrl: r.verifyUrl,
     userCode: r.userCode,
     expiresInSeconds: r.expiresInSeconds,
-    pollIntervalSeconds: r.pollIntervalSeconds
+    pollIntervalSeconds: r.pollIntervalSeconds,
+    serverUrl: canonical,
+    ...redirected ? { redirectedFrom: url } : {}
   };
 }
 function secondsLeft(expiresAt, now) {
@@ -9706,11 +9751,9 @@ async function whoamiDetailed(deps) {
   }
   const r = await whoami({ url: cfg.url, token: cfg.token });
   if (!r.ok) {
-    return {
-      ok: false,
-      error: r.guidance ? `${r.error} \u2014 ${r.guidance}` : r.error,
-      config: config2
-    };
+    const generic = r.guidance ? `${r.error} \u2014 ${r.guidance}` : r.error;
+    const error = r.status === 401 && !r.redirectedTo ? `the stored token was rejected by ${cfg.url} (401). It came from ${config2.tokenSource}. Either it was revoked, or it belongs to a different Kanon server than the one configured \u2014 re-run /kanon:setup to issue a fresh one for this URL, and clear any shell/keychain override first` : generic;
+    return { ok: false, error, config: config2 };
   }
   return {
     ok: true,
