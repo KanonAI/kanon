@@ -192,9 +192,14 @@ needs `manifest.capabilities` populated to fire on features that have them (§1.
 ## 3. Collect facts
 
 `kanon_collect_facts { runDir }` writes `facts.json` — the mechanical fact
-surface (data-model table, route map, cron/schedule table, constants). **The
-server renders these facts in the guide; your prose REFERENCES them, it never
-restates them as tables.** Adopt `facts.json`; never hand-write it.
+surface (data-model table, route map, cron/schedule table, constants) **plus the
+structured product-and-risk facts the collector can pattern-match: feature
+flags, analytics events, experiments, and security findings.** **The server
+renders these facts in the guide; your prose REFERENCES them, it never restates
+them as tables.** Adopt `facts.json`; never hand-write it. The collector is a
+floor, not a ceiling — research (§5) actively sweeps the same five dimensions to
+catch what patterns miss (the flag's off-branch, the uncovered interaction, the
+testing gap, the missing-auth finding).
 
 ## 4. Plan aspects
 
@@ -244,7 +249,9 @@ shared memory, not your context):
 >    one per line: `{ statement, codeAnchor:"path::Symbol", normalizedRuleKey,
 >    sourcePath, sourceLine }`. Each `normalizedRuleKey` is a stable kebab key,
 >    unique WITHIN your aspect (a key two aspects happen to share is deduped
->    first-wins at merge — name by meaning, not by number).
+>    first-wins at merge — name by meaning, not by number). **Sweep the five
+>    lenses in research-method.md on every aspect — tracking, testing, security,
+>    experiments, flags — grounding each finding (and each GAP) as a claim.**
 > 3. **Write `dives/<aspectKey>.json`** grounding EVERY paragraph and EVERY flow
 >    step with a `ruleRef` (a key from your claims) and/or an anchor
 >    `"path:line"` onto a file you read. Worked-example constants must be real.

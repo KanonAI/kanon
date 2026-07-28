@@ -52,6 +52,55 @@ A claim is the reusable unit of evidence: the dive references it by `ruleRef`,
 and synthesis reuses its anchor verbatim. Extract generously — an unused claim
 costs nothing, but a paragraph with no claim to cite has to be dropped.
 
+## Five lenses to sweep every aspect (always try — never skip)
+
+Behavioral rules are the spine, but a scan must ALSO actively surface five
+product-and-risk dimensions on every aspect. `kanon_collect_facts` (SKILL §3)
+already extracts what its patterns can match — analytics events, feature flags,
+experiments, and security patterns land structured in `facts.json`, and the
+guide renders them. Your job here is the safety net: read for these five, ground
+each as a claim (with a `codeAnchor`) and carry it into the dive (a paragraph,
+an `edgeCase`, or a `terminologyNote`), AND flag the GAPS the regex can't infer.
+Leave a lens empty only when the aspect genuinely has nothing — not because you
+didn't look.
+
+- **Tracking (product analytics).** For each analytics call you read
+  (`analytics.track`, `posthog.capture`, `amplitude.track`, `gtag`, a tracking
+  constants/registry module), capture the event name, its properties, the
+  provider, and the user action that fires it. Then flag **uncovered
+  interactions**: a form submit, button click, page view, or state change with
+  NO tracking nearby — product teams need to know which behaviors they're blind
+  to. That gap is a suggestion, not a fact; word it as one.
+- **Testing (E2E coverage).** For each nearby test file (`*.test.ts`,
+  `*.spec.ts`, `*_spec.rb`, …), note which flow it covers and what it asserts.
+  Then flag **testing gaps**: a flow, error handler, or edge case you documented
+  with no matching test — "this flow has no E2E test coverage." If a scenario is
+  reproducible enough that a tester could verify it, say so; that's a suggested
+  test.
+- **Security (audit every aspect).** Note auth/authz on each mutation (what's
+  protected, the guard, the failure response) — missing auth on a mutation is a
+  finding. Flag injection risk (user input into SQL/shell/`eval`), hardcoded
+  secrets/keys/tokens, stack-trace/internal-detail leaks in error responses,
+  cookies without httpOnly/secure/SameSite, JWT decoded without verify, sessions
+  without CSRF, and sensitive data (PII, financial, credentials) logged, stored
+  unencrypted, or put in URL params. Each finding names a severity
+  (critical/high/medium/low), the code pattern, and what to do about it.
+- **Experiments (A/B tests).** For experiment code (`getExperiment`,
+  `useExperiment`, `getVariation`, `abTest`, `splitTest`), document the name,
+  variants, hypothesis, the metric it moves, and whether it's still active or is
+  stale (a concluded experiment left in code is tech debt — flag cleanup
+  TODOs). Note which user flows branch on it.
+- **Flags (feature flags).** For each flag gate (`isEnabled`, `useFlag`,
+  `getFlag`, a LaunchDarkly/Statsig/Unleash/env-var check), name the flag, its
+  default, and the feature it gates. When behavior branches on a flag, describe
+  BOTH branches — flagged-on and flagged-off are two behaviors, and a stakeholder
+  needs both.
+
+These findings ground exactly like any rule: no anchor onto an unread file, no
+fabricated event name or severity. A suggestion (an uncovered interaction, a
+testing gap) is still grounded — anchor the code that has the gap, and phrase it
+as a gap, not as an existing fact.
+
 ## Write the dive — dives/<aspectKey>.json
 
 One file per resolved aspect. Every `paragraph` and every `flow step` carries

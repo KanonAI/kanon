@@ -214,14 +214,11 @@ function assembleBundle(opts) {
     );
   }
   const proposal = readJson(proposalPath);
-  const targetUrl = opts.targetUrl ?? manifest.targetUrl;
-  if (!targetUrl) {
-    throw new Error("no targetUrl \u2014 pass it or set it in manifest.json");
-  }
   const repoSlug = opts.repoSlug ?? manifest.repoSlug;
   if (!repoSlug) {
     throw new Error("no repoSlug \u2014 pass it or set it in manifest.json");
   }
+  const targetUrl = opts.targetUrl ?? manifest.targetUrl ?? `https://github.com/${repoSlug}`;
   const screens = [];
   const byKey = /* @__PURE__ */ new Map();
   const byUrl = /* @__PURE__ */ new Map();

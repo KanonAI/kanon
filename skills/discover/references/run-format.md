@@ -34,6 +34,10 @@ bundle.json            # written by kanon_assemble_bundle — never by hand
 `startedAt` must be UTC ISO with a `Z` suffix — it becomes the bundle's
 `capturedAt`.
 
+`targetUrl` is **required only in refine mode** (it's the page you crawl). Omit
+it in code-only runs rather than prompting the user — assembly derives the
+bundle's `targetUrl` from `repoSlug`.
+
 ## screens/NNN-\<slug\>.json
 
 `NNN` is a zero-padded visit counter; `<slug>` is a short kebab name.

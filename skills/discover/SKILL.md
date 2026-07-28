@@ -5,7 +5,7 @@ description: >
   Claude in Chrome) to build a Kanon taxonomy proposal (domains →
   features → capabilities). Use for "discover my app", "crawl the product",
   "build the knowledge base", "map what our app does".
-argument-hint: "[target-url] [repo-slug] [--refine (adds browser crawl)] [--auto-approve]"
+argument-hint: "[target-url (only needed with --refine)] [repo-slug] [--refine (adds browser crawl)] [--auto-approve]"
 disable-model-invocation: true
 ---
 
@@ -35,9 +35,15 @@ The discover command has two axes:
   alone doesn't capture the full IA (dynamic menus, runtime plugins, etc.).
 
 A target URL being available — as an argument, from `.kanon/config.json`,
-or handed over by `/kanon:setup` — is **not** a request to crawl. Every
-run needs one because `targetUrl` is a required field of the bundle contract.
-Only the explicit `--refine` flag opens a browser.
+or handed over by `/kanon:setup` — is **not** a request to crawl. Only the
+explicit `--refine` flag opens a browser.
+
+**Only refine mode needs a target URL, so only refine mode asks for one.** The
+URL describes a crawl; a code-only run never opens a browser, so there is
+nothing to point it at. Use one if it's already in the args or config, but in
+code-only mode **never prompt the user for it** — assembly falls back to the
+repo the code was read from. Asking for a URL a code-only run will not visit is
+a dead-end question that makes the run look like it wants to crawl.
 
 **Approval mode** (what happens after proposals land):
 - **Human review (default)**: proposals land on the server for review at the
@@ -80,11 +86,13 @@ happened**, **what's happening now**, and **what the user should do RIGHT NOW**
 3. **Node**: run `node --version` — need ≥ 20 for the bundled tools. If
    missing, stop with install guidance.
 4. **Config**: read `.kanon/config.json` if present. Merge `$ARGUMENTS`
-   (first = target URL, second = repo slug). Ask the user for anything still
-   missing (target URL, repo slug like `owner/app`) — the target URL is
-   **bundle metadata**, required by the bundle contract for every run including
-   code-only; asking for it never implies a crawl. Write the merged config
-   back to `.kanon/config.json` (never write tokens there).
+   (first = target URL, second = repo slug). Ask the user for the **repo slug**
+   (`owner/app`) if it's still missing. **The target URL is asked for ONLY in
+   refine mode** — there it's required, because it's the page you crawl. In
+   code-only mode use it if args or config already supply one, and otherwise
+   move on silently: assembly derives the bundle's `targetUrl` from the repo
+   slug. Write the merged config back to `.kanon/config.json` (never write
+   tokens there).
    *If there's no `.kanon/config.json` AND no Kanon credential yet*
    (a first-time project — `kanon_whoami` returns not-signed-in and the
    shell env is unset), suggest running **`/kanon:setup`** first: it signs
@@ -315,7 +323,8 @@ human decides they're right. Never skip this without the user's explicit
 
 | Symptom | Do |
 |---|---|
-| No target URL in args, config, or from the user | Ask for it — it's required **bundle metadata**, not a crawl request. Don't invent one. |
+| No target URL, code-only mode | Don't ask — assembly derives it from the repo slug. A code-only run never visits it. |
+| No target URL, `--refine` mode | Ask for it — it's the page you're about to crawl. Don't invent one. |
 | `--refine` passed, Claude in Chrome absent | ⚠️ fall back to code-only, say so, and note that `--refine` works once the extension is connected. Never skip the run. |
 | `kanon_*` MCP tools missing (`--plugin-dir` dev) | Use the CLI twin at `${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js` for assemble/validate; fetch taxonomy with curl (§1.5). |
 | `get_taxonomy` unreachable | Continue in fresh mode — the bundle pushes later. Say which mode you ended up in. |
