@@ -20177,7 +20177,7 @@ async function buildSelectedFiles(graph, paths, seedSet, entryPoints, prunedSet,
 function msg(e) {
   return e instanceof Error ? e.message : String(e);
 }
-var DEFAULT_SERVER_URL = "https://www.gokanon.com";
+var DEFAULT_SERVER_URL = "https://gokanon.com";
 function resolveServerUrl(raw) {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) return DEFAULT_SERVER_URL;
@@ -20464,7 +20464,7 @@ server.registerTool(
     description: "Start device-authorization sign-in to a Kanon server. Returns a short user code and a verify URL to approve in a browser (sign-up and workspace creation happen there). The device secret is stored in a local file and never returned to the model. Follow with kanon_setup_poll to await approval.",
     inputSchema: {
       serverUrl: external_exports.string().optional().describe(
-        "The Kanon server URL. Omit to use the default (https://www.gokanon.com); pass only to target a different instance, e.g. http://localhost:3000 for local dev."
+        "The Kanon server URL. Omit to use the default (https://gokanon.com); pass only to target a different instance, e.g. http://localhost:3000 for local dev."
       )
     }
   },

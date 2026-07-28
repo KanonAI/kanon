@@ -9592,7 +9592,7 @@ async function buildSelectedFiles(graph, paths, seedSet, entryPoints, prunedSet,
 function msg(e) {
   return e instanceof Error ? e.message : String(e);
 }
-var DEFAULT_SERVER_URL = "https://www.gokanon.com";
+var DEFAULT_SERVER_URL = "https://gokanon.com";
 function resolveServerUrl(raw) {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) return DEFAULT_SERVER_URL;

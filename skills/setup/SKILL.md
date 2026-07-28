@@ -70,7 +70,7 @@ workspace and the token's *source*, never its value.
 
 ## 2. Server URL
 
-**Default to `https://www.gokanon.com` — do NOT ask.** The only override is a
+**Default to `https://gokanon.com` — do NOT ask.** The only override is a
 `--host` flag in `$ARGUMENTS` (`--host <url>` or `--host=<url>`); use that value
 instead when present (a bare host like `localhost:3000` gets `https://`
 assumed, so pass `http://localhost:3000` for local dev). Ignore any bare
@@ -82,8 +82,8 @@ silently re-loop and never fall back to prompting for the URL.
 As soon as §3's begin succeeds, **write the `serverUrl` it returned into
 `.kanon/config.json`** (`{ "url": … }`, merging with any existing file) —
 that exact string, never the one you passed in. They differ when the host
-redirects (apex→www, http→https), and `serverUrl` is the one the credential is
-filed under. This must happen BEFORE §4: the credentials store is keyed by
+redirects (a www/apex fold either way, or http→https), and `serverUrl` is the
+one the credential is filed under. This must happen BEFORE §4: the credentials store is keyed by
 server URL, so `kanon_whoami` can only find the fresh token once the project
 names the same URL.
 
@@ -95,7 +95,7 @@ auth header"* — and use `serverUrl` everywhere from then on.
 
 1. Call `kanon_setup_begin`. Pass `{ serverUrl }` **only** when §2 found a
    `--host` override; otherwise call it with no arguments so it targets the
-   default `https://www.gokanon.com`.
+   default `https://gokanon.com`.
    - Failure → surface the `guidance` (typo, server down, http-vs-https, VPN, or
      "too old / wrong URL" for a 404) and go back to §2 (re-check the `--host`,
      or note the default instance is unreachable).

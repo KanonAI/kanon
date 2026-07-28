@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.15.0 — 2026-07-27
+
+**The default instance is now `https://gokanon.com`** — the apex, which is the
+canonical host. `www` redirects onto it. Defaulting to the canonical spelling
+means the first authed call is never a redirect, and so never loses its
+`Authorization` header.
+
+Nothing breaks if you were already signed in: an existing `www` credential
+still authenticates until the redirect flips, and after it flips the 0.14.0
+redirect detection names the exact URL to move to. Re-run `/kanon:setup` to
+file the credential under the apex.
+
 ## 0.14.0 — 2026-07-27
 
 **A redirecting host no longer produces a sign-in that can never
