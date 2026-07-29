@@ -27,12 +27,21 @@ bundle.json            # written by kanon_assemble_bundle — never by hand
   "navSkeleton": [ { "label": "Treasury", "url": "…", "group": "Banking" } ],
   "frontier": ["<urls not yet visited>"],
   "visited": [ { "url": "…", "file": "004-treasury.json" } ],
-  "notes": ["permission-gated: /admin returned 403 for this role"]
+  "notes": ["permission-gated: /admin returned 403 for this role"],
+  "timings": {
+    "mappers": { "startedAt": "2026-07-16T14:05:10Z", "endedAt": "2026-07-16T14:12:41Z" },
+    "boundaries": { "startedAt": "2026-07-16T14:12:50Z", "endedAt": "2026-07-16T14:16:03Z" }
+  }
 }
 ```
 
 `startedAt` must be UTC ISO with a `Z` suffix — it becomes the bundle's
 `capturedAt`.
+
+`timings` is the phase telemetry (SKILL "Timing telemetry"): one
+`{ startedAt, endedAt }` per phase (`preflight`, `mappers`, `boundaries`,
+`crawl`, `synthesis`, `assemble`), stamped with real `date -u` output as each
+phase turns over. Diagnostic only — nothing validates or blocks on it.
 
 `targetUrl` is **required only in refine mode** (it's the page you crawl). Omit
 it in code-only runs rather than prompting the user — assembly derives the

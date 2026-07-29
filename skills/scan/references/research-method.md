@@ -52,17 +52,23 @@ A claim is the reusable unit of evidence: the dive references it by `ruleRef`,
 and synthesis reuses its anchor verbatim. Extract generously — an unused claim
 costs nothing, but a paragraph with no claim to cite has to be dropped.
 
-## Five lenses to sweep every aspect (always try — never skip)
+## Five lenses to sweep every aspect (per your lens policy)
 
-Behavioral rules are the spine, but a scan must ALSO actively surface five
-product-and-risk dimensions on every aspect. `kanon_collect_facts` (SKILL §3)
-already extracts what its patterns can match — analytics events, feature flags,
+Behavioral rules are the spine, but a scan must ALSO surface five
+product-and-risk dimensions. `kanon_collect_facts` (SKILL §3) already
+extracts what its patterns can match — analytics events, feature flags,
 experiments, and security patterns land structured in `facts.json`, and the
-guide renders them. Your job here is the safety net: read for these five, ground
+guide renders them. Your job here is the safety net: read for these, ground
 each as a claim (with a `codeAnchor`) and carry it into the dive (a paragraph,
 an `edgeCase`, or a `terminologyNote`), AND flag the GAPS the regex can't infer.
-Leave a lens empty only when the aspect genuinely has nothing — not because you
-didn't look.
+
+**Which lenses you sweep ACTIVELY is set by your brief's lens policy** (the
+SKILL's depth policy, by relevance band): band 0 sweeps all five actively;
+band 1 sweeps security + flags actively and records the others only where the
+code you already read surfaces them; band 2 (capsule) sweeps security only.
+Two rules survive every band: a finding you DID encounter is always recorded
+(no policy says "ignore what you saw"), and an ACTIVE lens is left empty only
+when the aspect genuinely has nothing — not because you didn't look.
 
 - **Tracking (product analytics).** For each analytics call you read
   (`analytics.track`, `posthog.capture`, `amplitude.track`, `gtag`, a tracking

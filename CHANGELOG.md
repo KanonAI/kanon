@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.23.0 — 2026-07-29
+
+**The scan spends by relevance, not by size.** The taxonomy now carries a
+`relevanceBand` per node (0 core · 1 standard · 2 edge · 3 never ranked), and
+`/kanon:scan`'s queue reads it: core features get the full 3–8-chapter
+treatment, standard features cap at 4 chapters, and edge features get a
+one-chapter **capsule guide** — real cited claims over the boundary's own
+files, through the same grounding gates, just one chapter deep. A never-ranked
+repo runs at full depth everywhere: a band decides how MUCH gets researched,
+never how carefully. An explicit `/kanon:scan <feature-key>` always runs the
+deep scan — and the Kanon guide page offers exactly that button when a worker
+is online and the guide is thin.
+
+**Scan-all schedules chapters, not features.** The fleet used to run three
+feature workers, each researching its chapters serially inside itself. The
+dispatcher now draws prep / research / finish stages from ONE global pool
+(4 subagents in flight), so a feature's chapters run in parallel with each
+other AND with other features' work — largest chapter first, finishing beats
+starting. Same gates, same per-aspect files; the wall clock just stops paying
+for idle slots.
+
+**Discover derives boundaries in parallel.** Boundary derivation — one grep +
+reduce-to-prefixes per feature, the longest serial stretch of a discover run —
+now fans out across up to 4 subagents after the mapper merge, under the same
+final-message-is-the-report contract as the mappers.
+
+**Runs now say where their time went.** Both skills stamp `manifest.timings`
+(`select`, `research:<aspectKey>`, `synthesis`, …) with real `date -u` output
+at every phase turn. Diagnostic only, never blocking — and the first data
+anyone has had on where a customer-side run actually spends its wall-clock.
+
+**Two silent costs removed.** A worktree attempt within 5 minutes of the last
+successful `git fetch` skips the refetch (retry backoffs used to pay a network
+round-trip each time), and a taxonomy push no longer waits on the server's
+relevance ranking — the server ranks behind the response, so `/kanon:push`
+stops reporting timeouts on pushes that actually landed.
+
 ## 0.22.0 — 2026-07-29
 
 **A worker run resumes where it stopped instead of starting over.** A task that

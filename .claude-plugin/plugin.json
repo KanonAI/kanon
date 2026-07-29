@@ -1,7 +1,7 @@
 {
   "name": "kanon",
   "displayName": "Kanon",
-  "version": "0.22.0",
+  "version": "0.23.0",
   "description": "Turn your web app into a verified knowledge base, driven from the Kanon app: /kanon:setup signs you in, /kanon:worker runs a daemon that executes what your team queues in the UI (discovery, guide scans, product changes) on your own machine, and /kanon:discover, /kanon:scan and /kanon:work still do the same work interactively; /kanon:setup-ci wires per-test coverage from your CI so passing tests verify the claims",
   "author": {
     "name": "Kanon",

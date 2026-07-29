@@ -61,18 +61,31 @@ never have to guess twice.
   "startedAt": "2026-07-16T14:05:00Z",
   "model": "<your model id>",
   "status": "researching",
+  "relevanceBand": 0,
   "aspects": [
     { "key": "card-issuance", "status": "researched" },
     { "key": "risk-controls", "status": "pending" }
   ],
   "currentAspect": "risk-controls",
-  "notes": ["closureUnavailable — seeded from grep over card/limit/authorization"]
+  "notes": ["closureUnavailable — seeded from grep over card/limit/authorization"],
+  "timings": {
+    "select": { "startedAt": "2026-07-16T14:05:10Z", "endedAt": "2026-07-16T14:05:40Z" },
+    "research:card-issuance": { "startedAt": "2026-07-16T14:07:02Z", "endedAt": "2026-07-16T14:14:31Z" }
+  }
 }
 ```
 
 `status` is one of `selecting · researching · synthesizing · composing ·
 assembled · pushed · failed`; each `aspects[].status` is `pending` or
 `researched`. `currentAspect` is `null` (or absent) when no aspect is in flight.
+
+`relevanceBand` records the depth this run committed to (the SKILL's depth
+policy) so a resume never re-derives the band and changes depth mid-run.
+`timings` is the phase telemetry (SKILL "Timing telemetry"): one
+`{ startedAt, endedAt }` per phase, plus `research:<aspectKey>` spans from the
+worker reports. Both are diagnostic — the schema is loose and never rejects a
+manifest over them — but stamp them as you go: a run with no timings can't
+tell anyone where its wall-clock went.
 
 `startedAt` is UTC ISO with a `Z`. `status` is the resume anchor — §0 reads it
 to know where to pick up. Update it at every transition (`selecting` →

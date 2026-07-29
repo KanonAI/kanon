@@ -84,13 +84,24 @@ Reference files (read when you reach that stage):
 After EVERY state change, re-render this one line (states: ⬜ not started ·
 🔄 in progress (with a parenthetical) · ✅ done · ⚠️ done-with-caveat · ❌ failed):
 
-`✅ Preflight · 🔄 Code analysis (4/7 areas) · ⬜ Crawl · ⬜ Synthesis · ⬜ Assemble · ⬜ Push`
+`✅ Preflight · 🔄 Code analysis (4/6 mappers) · ⬜ Boundaries · ⬜ Crawl · ⬜ Synthesis · ⬜ Assemble · ⬜ Push`
 
 Drop `Crawl` from the line entirely in code-only mode — don't render a step you
 will never run. During the §3a fan-out, count delivered mapper reports
-(`Code analysis (4/6 mappers)`). Then, in at most three short lines: **what just
+(`Code analysis (4/6 mappers)`); during §3b, count boundary workers the same
+way (`Boundaries (2/4)`). Then, in at most three short lines: **what just
 happened**, **what's happening now**, and **what the user should do RIGHT NOW**
 (or "nothing — I'm working"). Never go silent across a tool call.
+
+## Timing telemetry (standing rule)
+
+At every phase transition, stamp `manifest.timings` —
+`"<phase>": { "startedAt", "endedAt" }`, UTC ISO from
+`date -u +%Y-%m-%dT%H:%M:%SZ` (never invent a timestamp). Phases:
+`preflight`, `mappers`, `boundaries`, `crawl` (refine only), `synthesis`,
+`assemble`. Timings are diagnostic — nothing validates them, nothing blocks
+on them — but a run with no timings cannot tell anyone where its wall-clock
+went, so stamp as you go, not retroactively.
 
 ## 1. Preflight
 
@@ -203,8 +214,9 @@ Don't walk the areas above serially. Spawn **one mapper subagent per area** —
 routes/pages (with layouts + page metadata) · nav components · guards &
 middleware · data schema · module structure · ownership — **all in a single
 message** so they run in parallel. Partition by area so no two mappers read the
-same files. Step 6's boundary derivation stays on the main thread: it needs the
-merged picture, not one area's slice.
+same files. Step 6's boundary derivation needs the merged picture, not one
+area's slice — so it runs AFTER the merge, as its own fan-out (§3b), never
+inside a mapper.
 
 **State the return contract in every mapper prompt: the mapper's final message
 IS its report.** Not a file on disk. Not a follow-up message. Not a one-line
@@ -230,6 +242,38 @@ the mappers supply evidence, you decide structure. Two mappers landing on the
 same capability is corroboration: raise its confidence. One mapper alone is a
 single signal: don't. Carry their "could not verify" items into `report.md` as
 gaps rather than dropping them.
+
+### 3b. Boundary fan-out (after the merge)
+
+Boundary derivation (step 6) is one grep sweep + a reduce-to-prefixes
+judgment PER FEATURE — 15–60+ features make it the longest serial stretch in
+a discover run if you do it alone. Once the merged feature list exists,
+partition it across **up to 4 boundary subagents in a single message**
+(contiguous slices, so siblings in one domain land together) and derive in
+parallel. State the same return contract as §3a: **the final message IS the
+report** — no files, no follow-ups.
+
+The prompt template:
+
+> Derive code boundaries for these features of the codebase at `<repo root>`:
+> `<the slice — each feature's key, name, domain, route(s), and the evidence
+> paths the mappers found for it>`. For each feature, report as your final
+> message:
+> - `globs`: **1–4 simple prefix globs** (`dir/**` semantics ONLY) locating
+>   its code — grep its nouns (`grep -rlniE '<noun1>|<noun2>' src`), then
+>   reduce the hits to directory prefixes, never per-file globs;
+> - `routePrefixes`: from the routes it owns (empty for a capability with no
+>   user-facing surface — and then NO `route` either);
+> - a one-line **why** (the evidence behind the prefixes), and `globs: []`
+>   with a note when you genuinely can't locate the code — never guess.
+> Do not write files. Do not restructure the taxonomy — the feature list is
+> settled; you supply boundaries only.
+
+Fold the reported boundaries into `proposal.json` yourself, applying step
+6's rules verbatim (boundary quality is what un-halves confidence — a wrong
+prefix is worse than an honest `globs: []`). A worker that returns nothing
+gets ONE re-ask with the contract restated; after that, derive its slice
+yourself. Boundary workers never touch `proposal.json` or `manifest.json`.
 
 ## 4. Browser crawl — REFINE MODE ONLY (skip in code-only mode)
 
@@ -365,6 +409,7 @@ human decides they're right. Never skip this without the user's explicit
 | `get_taxonomy` 404 | Slug owned by another workspace — never "not created yet", since an unclaimed slug is auto-claimed by the fetch. Pick another, move the repo in the app, or re-run `/kanon:setup` as the owning account. |
 | Any call reports `redirectedTo` | The configured host redirects, and the hop strips the auth header. Set `url` in `.kanon/config.json` to the reported value, then re-run `/kanon:setup`. |
 | A mapper delivers nothing / goes idle | Its final message *was* the report. Re-ask ONCE with the return contract restated; if it's still empty, map that area yourself. |
+| A boundary worker (§3b) delivers nothing | Same contract as mappers: re-ask ONCE, then derive its slice of boundaries yourself. Never ship features whose boundaries were simply never attempted. |
 | Assemble reports the bundle invalid | Fix `proposal.json` or the screen records and re-assemble. **Never hand-edit `bundle.json`.** |
 | Assemble rejects `crawl` evidence with zero screens | Code-only mode has no screens — re-source that evidence as `route`/`nav`/`module`. |
 | Crawl interrupted (compaction, restart) | Re-read `manifest.json`, resume from `frontier`, skip `visited`. Never start over. |

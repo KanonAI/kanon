@@ -18204,7 +18204,13 @@ function parsePrismaModels(schema) {
     const trimmed = raw.trim();
     const start = MODEL_RE.exec(trimmed);
     if (start) {
-      current = { model: start[1], line: i + 1, columns: [], uniques: [] };
+      current = {
+        model: start[1],
+        line: i + 1,
+        columns: [],
+        uniques: [],
+        references: []
+      };
       continue;
     }
     if (!current) continue;
@@ -18214,7 +18220,8 @@ function parsePrismaModels(schema) {
         table: current.table ?? current.model,
         line: current.line,
         columns: current.columns,
-        uniques: current.uniques
+        uniques: current.uniques,
+        references: current.references
       });
       current = null;
       continue;
@@ -18236,7 +18243,12 @@ function parsePrismaModels(schema) {
     if (!col) continue;
     const [, name, type, attrs] = col;
     const bare = type.replace(/[[\]?]/g, "");
-    if (names.has(bare)) continue;
+    if (names.has(bare)) {
+      if (/@relation\(/.test(attrs) && /\bfields:/.test(attrs)) {
+        current.references.push(bare);
+      }
+      continue;
+    }
     const notes = [];
     if (attrs.includes("@id")) notes.push("PK");
     if (attrs.includes("@unique")) {
@@ -18251,7 +18263,11 @@ function parsePrismaModels(schema) {
       ...notes.length ? { note: notes.join(", ") } : {}
     });
   }
-  return models;
+  const tableOf = new Map(models.map((m) => [m.model, m.table]));
+  return models.map((m) => ({
+    ...m,
+    references: m.references.map((r) => tableOf.get(r) ?? r)
+  }));
 }
 function modelsToEntityFacts(models, schemaPath, isReferenced, cap = 40) {
   const facts = [];
@@ -18291,7 +18307,10 @@ function parseRailsSchema(schema) {
         table: current.table,
         line: current.line,
         columns: current.columns,
-        uniques: current.uniques
+        uniques: current.uniques,
+        // Resolved against the real table list below — a `*_id` column is only
+        // a foreign key if something it could point at actually exists.
+        references: current.columns.filter((c) => c.name.endsWith("_id")).map((c) => c.name.slice(0, -3))
       });
       current = null;
       continue;
@@ -18314,7 +18333,17 @@ function parseRailsSchema(schema) {
       ...notes.length ? { note: notes.join(", ") } : {}
     });
   }
-  return models;
+  const tables = new Set(models.map((m) => m.table));
+  const resolve3 = (stem) => {
+    for (const candidate of [stem, `${stem}s`, `${stem}es`]) {
+      if (tables.has(candidate)) return candidate;
+    }
+    return null;
+  };
+  return models.map((m) => ({
+    ...m,
+    references: m.references.map(resolve3).filter((t) => t !== null)
+  }));
 }
 
 // ../../../src/infrastructure/facts/extract-seed-enums.ts

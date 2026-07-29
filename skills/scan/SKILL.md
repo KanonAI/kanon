@@ -57,7 +57,9 @@ footer**:
 - **`--next`** — scan ONE feature: `AskUserQuestion` over that same queue,
   recommending the first (the next approved feature with a boundary and no
   guide yet), then stop and report what's left.
-- **`<feature-key>`** — scan exactly that feature.
+- **`<feature-key>`** — scan exactly that feature, **always at full (band-0)
+  depth**: an explicit key is a request for the deep guide, so the depth
+  policy's bands drive defaults in the other modes, never a refusal here.
 
 An `owner/repo`-shaped argument (contains `/`) is the repo-slug, never a
 feature key.
@@ -118,6 +120,41 @@ gate round-trip; internalize them instead.
 Non-tool sessions (no `kanon_*` MCP tools) use the `dist/cli.js` twins:
 `node ${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js select-files|collect-facts|assemble-guide|push-guide …`.
 
+## Depth policy — spend by relevance band
+
+`kanon_get_taxonomy` returns a `relevanceBand` per node: **0 = core, 1 =
+standard, 2 = edge, 3 = never ranked** (absent against an older server). In
+`--next` and scan-all modes the band decides **how much** research a feature
+gets — never how careful it is. Every band passes the SAME grounding gates;
+a band only chooses how many units of work exist:
+
+| Band | Aspects (§4) | Lens sweep (§5) | Closure (§2) |
+|---|---|---|---|
+| **0 core** — and **3 / absent** | 3–8 chapters | all five lenses, actively, on every aspect | normal |
+| **1 standard** | ≤ 4 chapters | security + flags actively on every aspect; tracking/testing/experiments only where code you already read surfaces them | normal |
+| **2 edge** | exactly **1 chapter** (`overview`) — a **capsule guide** | security actively; the rest only where encountered | `maxForwardDepth: 0` (boundary files only) |
+
+A capsule is a real guide — cited claims, grounded paragraphs, real key
+facts — just one chapter deep. Report a pushed capsule as `✅ pushed
+(capsule)` and note that the deep guide is one command away:
+`/kanon:scan <feature-key>` always runs full depth.
+
+**Never ranked means FULL depth.** Band 3 (or a server that sends no band)
+gets the band-0 treatment — banding must never make an unranked repo
+shallower than it was before bands existed.
+
+## Timing telemetry (standing rule)
+
+Whoever writes a phase transition into `manifest.json` also stamps it into
+`manifest.timings` — `"<phase>": { "startedAt", "endedAt" }`, UTC ISO from
+`date -u +%Y-%m-%dT%H:%M:%SZ` (never invent a timestamp). Phases: `select`,
+`freshness`, `facts`, `aspects`, `research` (the whole-stage span; each §5
+worker additionally reports its own span, recorded as
+`research:<aspectKey>`), `synthesis`, `frontMatter`, `assemble`, `push`.
+The manifest schema is loose and a missing stamp never blocks a run — but a
+run with no timings cannot tell anyone where its wall-clock went, so stamp
+as you go, not retroactively.
+
 ## 0. Resume detection (do this first)
 
 Find the newest `.kanon/runs/*-scan-*/manifest.json`. If its `status` is
@@ -133,8 +170,10 @@ re-dispatch ONLY the aspects whose dive is missing or still bouncing — a dive
 that already passed is never re-run. Once every aspect has passed, (re-)run
 `kanon_assemble_guide { check:"merge" }` before §6 (it's idempotent).
 
-In scan-all mode, finish the interrupted run first, then rebuild the queue
-(§10) and continue — there is no fleet state file; features already pushed drop
+In scan-all mode several features may be mid-flight at once — finish EVERY
+interrupted run (any scan manifest whose status isn't `pushed`/`failed`,
+honoring each manifest's recorded band/depth), then rebuild the queue (§10)
+and continue — there is no fleet state file; features already pushed drop
 out of the queue via `hasGuide`, so re-deriving is safe.
 
 ## 1. Preflight
@@ -146,9 +185,9 @@ out of the queue via `hasGuide`, so re-deriving is safe.
 3. `kanon_get_taxonomy` — it returns a **compact** projection by default
    (`view: "compact" | "full"`), which drops `description` and `capabilities`
    but keeps every structural field this skill needs: `key`, `parentKey`,
-   `state`, `route`, `space`, `boundary`, `hasGuide`, `guideUpdatedAt`. Ask for
-   `view: "full"` only when you actually need the prose. Resolve the mode
-   (see **Modes**):
+   `state`, `route`, `space`, `boundary`, `relevanceBand`, `hasGuide`,
+   `guideUpdatedAt`. Ask for `view: "full"` only when you actually need the
+   prose. Resolve the mode (see **Modes**):
    - **`<feature-key>` given** → pick that approved feature (unknown key →
      `AskUserQuestion` from the approved features).
    - **`--next`** → build the §10 queue and `AskUserQuestion` which ONE
@@ -170,8 +209,9 @@ out of the queue via `hasGuide`, so re-deriving is safe.
    in scan-all mode** (§10.1) — see §10.2 for the re-scan pre-skip.
 5. Create the run dir `.kanon/runs/<UTC-stamp>-scan-<featureKey>/` and
    `manifest.json` (`kind:"scan"`, `status:"selecting"`, the feature identity,
-   your `model`, empty `aspects`). Record the feature's `capabilities` from the
-   taxonomy when you have them — the §2 freshness pre-skip hashes them, so a
+   your `model`, empty `aspects`, and `relevanceBand` + the depth this run is
+   using — resume must not re-derive the band and change depth mid-run).
+   Record the feature's `capabilities` from the taxonomy when you have them — the §2 freshness pre-skip hashes them, so a
    missing/empty list only makes that skip fall back to researching (never a
    false skip). `capabilities` come from `view:"full"` (compact drops them), so
    populate them only when a pre-skip is in play (§10.2). Announce the path. See
@@ -181,6 +221,9 @@ out of the queue via `hasGuide`, so re-deriving is safe.
 
 Call `kanon_select_files { runDir, globs }` (the boundary globs). It walks
 the import closure and writes `files.json` — **adopt it; never hand-write it.**
+**Band-2 (capsule) runs pass `maxForwardDepth: 0`** — boundary-matched files
+only, no import walk: a capsule reads the feature's own code, not its
+dependency tree.
 
 - **`deadGlobs` non-empty** — one of the boundary's globs matched **no files**,
   so the scan is narrower than the boundary claims and the gap is invisible in
@@ -225,13 +268,19 @@ testing gap, the missing-auth finding).
 
 ## 4. Plan aspects
 
-Write `aspects.json`: **3–8 business-meaningful chapters**, grouped by what the
-code MEANS, not by directory. Each: kebab `key`, `name`, `description`,
-optional `order`, and `pathPatterns` (globs, first-match-wins — put specific
-patterns early). Order user-facing flow first, internals after. Examples:
+Write `aspects.json`: **business-meaningful chapters at the count the depth
+policy assigns** — band 0 (and 3/absent): 3–8; band 1: at most 4 (merge the
+internals chapters, keep the user-facing ones); band 2: exactly one aspect
+`{ key: "overview", pathPatterns: ["**"] }`. Group by what the code MEANS,
+not by directory. Each: kebab `key`, `name`, `description`, optional
+`order`, and `pathPatterns` (globs, first-match-wins — put specific patterns
+early). Order user-facing flow first, internals after. Examples:
 `signup-approval-flow`, `scheduled-jobs-engine`, `risk-controls`,
-`admin-operations`, `customer-ui`, `vendor-integration`. (Aspects over 40 files
-auto-split during resolution.)
+`admin-operations`, `customer-ui`, `vendor-integration`. (Aspects over 40
+files auto-split during resolution. If resolution splits a capsule's one
+aspect, the tool is telling you the "edge" feature isn't small — research
+the split aspects as-is, still under the band-2 lens policy, and note the
+band/size mismatch in your final summary so the ranking gets a second look.)
 
 Then `kanon_assemble_guide { runDir, check:"aspects" }`. It materializes
 `filePaths` (first-match over the selected files) + `priorityFiles` and writes
@@ -250,11 +299,13 @@ would be serially: every dive still passes the SAME grounding gate. Parallelism
 trades tokens for wall-clock — each worker reasons on its own context — but the
 closure reads and the gate are unchanged.
 
-**Do NOT nest workers.** If THIS feature is itself running inside a scan-all
-feature worker (§10), research its aspects SERIALLY in that worker — the fleet
-already parallelizes across features, and a worker spawning workers is not
-supported. Fan out only when this is the top-level feature (single-feature or
-`--next` modes).
+**Workers never spawn workers — the top-level session is the only
+dispatcher.** In single-feature and `--next` modes that's this section: fan
+the aspects out yourself, up to 4 at a time. In scan-all mode the SAME
+aspect workers exist, but §10's global pool dispatches them — a feature's
+aspects run in parallel with each other AND with other features' work,
+drawn from one budget. What is not supported is nesting: a subagent that
+needs parallelism reports back to the parent, which dispatches.
 
 Give each worker this brief (it works entirely from disk — the run dir is the
 shared memory, not your context):
@@ -271,9 +322,10 @@ shared memory, not your context):
 >    one per line: `{ statement, codeAnchor:"path::Symbol", normalizedRuleKey,
 >    sourcePath, sourceLine }`. Each `normalizedRuleKey` is a stable kebab key,
 >    unique WITHIN your aspect (a key two aspects happen to share is deduped
->    first-wins at merge — name by meaning, not by number). **Sweep the five
->    lenses in research-method.md on every aspect — tracking, testing, security,
->    experiments, flags — grounding each finding (and each GAP) as a claim.**
+>    first-wins at merge — name by meaning, not by number). **Sweep the lenses
+>    in research-method.md per YOUR lens policy: `<the band's lens policy from
+>    the depth policy — state it here>` — grounding each finding (and each
+>    GAP) as a claim.**
 > 3. **Write `dives/<aspectKey>.json`** grounding EVERY paragraph and EVERY flow
 >    step with a `ruleRef` (a key from your claims) and/or an anchor
 >    `"path:line"` onto a file you read. Worked-example constants must be real.
@@ -282,7 +334,9 @@ shared memory, not your context):
 >    priority file → read it; <80% grounded → add a `ruleRef`/anchor or drop the
 >    sentence; bad anchor → read the file or fix the path) and re-check until it
 >    PASSES. Never lower the bar by deleting evidence.
-> 5. Report back `{ aspectKey, passed, grounded, total }`.
+> 5. Report back `{ aspectKey, passed, grounded, total, startedAt, endedAt }`
+>    — the timestamps from `date -u +%Y-%m-%dT%H:%M:%SZ` at your start and
+>    end, for the parent's `manifest.timings`.
 >
 > **Isolation (inviolable):** write ONLY `claims/<aspectKey>.jsonl`,
 > `readlog/<aspectKey>.jsonl`, and `dives/<aspectKey>.json`. NEVER touch the
@@ -384,12 +438,17 @@ warnings. Set `status:"assembled"`.
 
 ## 10. Scan-all loop (default — no arguments)
 
-1. Build the queue **from the taxonomy alone**, in taxonomy order, from every
-   approved feature. `kanon_get_taxonomy` already returns `boundary` and
-   `hasGuide` per feature, so this costs **zero extra round-trips**:
+1. Build the queue **from the taxonomy alone**, from every approved feature.
+   `kanon_get_taxonomy` already returns `boundary`, `hasGuide`, and
+   `relevanceBand` per feature, so this costs **zero extra round-trips**:
    - **queued** — non-empty `boundary`, `hasGuide: false`;
    - **has a guide** — `hasGuide: true`; skipped by default;
    - **not scannable** — `boundary` null/empty (needs `/kanon:discover`).
+
+   Order the queue by **band, then taxonomy order** — core features first,
+   then standard, then edge capsules, with never-ranked (band 3) last but at
+   FULL depth. The valuable half of the KB lands first, and each feature's
+   depth follows the depth policy.
 
    **Do NOT call `kanon_get_guide_status` per feature to partition.** At
    60 features that is 60 round-trips for an answer it cannot give: input-hash
@@ -397,30 +456,53 @@ warnings. Set `status:"assembled"`.
    `select_files` runs in §2. Queue on `hasGuide` and let the server's hash-skip
    be authoritative on push (§9.2) — an unchanged feature ends `skipped:true`,
    which is cheap and correct.
-2. Show the partition, then confirm ONCE (`AskUserQuestion`): scan the M queued
-   features, skipping X that already have guides and Y unscannable? Offer
-   re-scanning the guided ones as an explicit choice — the user knows what
-   changed, and the server drops any that didn't. This confirmation covers
-   every push in the loop. **If the user opts to re-scan guided features**, do
+2. Show the partition — including the depth split (N deep · M standard · K
+   capsules, from the bands) so the user knows what they're buying — then
+   confirm ONCE (`AskUserQuestion`): scan the M queued features, skipping X
+   that already have guides and Y unscannable? Offer re-scanning the guided
+   ones as an explicit choice — the user knows what changed, and the server
+   drops any that didn't. This confirmation covers every push in the loop. **If the user opts to re-scan guided features**, do
    ONE `kanon_get_taxonomy { view: "full" }` and record each feature's
    `capabilities` into its manifest, so the §2 freshness pre-skip can cheaply
    drop the unchanged ones (otherwise each does a full research pass only to get
    `skipped:true` on push).
-3. Run the queued features through a bounded worker POOL — dispatch each to its
-   own subagent (the Task tool), **FLEET_CONCURRENCY = 3 at a time**. Each
-   feature worker runs §1.5–§9 in its own run dir + manifest (with the feature
-   identity, boundary, and — when re-scanning — capabilities in its brief),
-   researching its aspects SERIALLY inside the worker (NO nested workers — the
-   pool IS the parallelism at scan-all scale). Re-render the fleet-prefixed
-   progress line as workers report. A feature that fails terminally (assemble
-   fatal the worker cannot fix, push error, unapproved on push) → its worker
-   sets `manifest.status:"failed"`, records why in `manifest.notes`, marks it
-   ❌, and the pool moves on — one bad feature never stops the fleet. Pushes are
+3. Run the queue through **ONE global worker pool — up to 4 subagents in
+   flight at any moment** (drop to 2 if you hit rate limits), where the unit
+   of dispatch is a feature STAGE, not a whole feature:
+   - **prep(feature)** — §1.5–§4 in the feature's own run dir: manifest,
+     select, freshness pre-skip, facts, aspect plan + resolve. Brief carries
+     the feature identity, boundary, band (and — when re-scanning —
+     capabilities). Reports the resolved aspect keys with file counts and its
+     phase timings, or `unchanged: true`.
+   - **research(feature, aspect)** — one §5 aspect worker, exactly the §5
+     brief; per-aspect files only.
+   - **finish(feature)** — `check:"merge"` + §6–§9: synthesis, front matter,
+     assemble, push. Reports pushed / `skipped:true` / failed, the
+     `reviewUrl`, and its phase timings.
+
+   YOU are the only dispatcher — workers never spawn workers. Scheduling
+   rules, in order:
+   1. **finish beats research beats prep** — drain started features before
+      opening new ones, so guides land earliest and work-in-progress stays
+      bounded.
+   2. Start new features in queue order (band, then taxonomy order).
+   3. Within a feature, dispatch its largest aspects first (by file count) —
+      the long chapter must not become the feature's tail.
+
+   **One manifest, one writer at a time:** the prep worker creates it, the
+   parent flips `aspects[]` statuses and stamps research timings as workers
+   report, the finish worker owns it through §6–§9. Research workers never
+   touch it. A prep reporting `unchanged: true` ends its feature ⏭ skipped.
+   A stage that fails terminally (assemble fatal the finish worker cannot
+   fix, push error, unapproved on push) fails ITS feature — mark the
+   manifest `failed`, record why in `manifest.notes`, ❌ in the summary —
+   and the pool moves on: one bad feature never stops the fleet. Pushes are
    independent and the server hash-skip is authoritative, so ordering never
-   matters.
-4. Finish with a summary table — feature · result (✅ pushed / ⏭ skipped (has a
-   guide, or the push returned unchanged) / ⚠️ not scannable / ❌ failed +
-   one-line reason) · `reviewUrl` — and link the KB
+   matters. Re-render the fleet-prefixed progress line as reports arrive.
+4. Finish with a summary table — feature · band · result (✅ pushed / ✅
+   pushed (capsule) / ⏭ skipped (has a guide, or the push returned
+   unchanged) / ⚠️ not scannable / ❌ failed + one-line reason) ·
+   `reviewUrl` — and link the KB
    (`<server_url>/kb/<repoSlug>`) once. If anything was ✅ pushed, close with the
    **verification footer** (intro).
 
@@ -451,6 +533,8 @@ already-pushed features fall out via `hasGuide`.
 | Scan-all: one feature fails terminally | Mark its manifest `failed` with a note, continue the fleet, report it in the summary. |
 | `--next` / scan-all finds an empty queue | Every approved feature already has a guide — report that and stop. |
 | `get_taxonomy` payload too large | You asked for `view: "full"`. The default compact projection carries every field §1/§10 need. |
+| `relevanceBand` absent from the taxonomy | Older server — treat every feature as band 0/3 (full depth). Banding degrades to exactly the pre-band behavior, never to shallower guides. |
+| A capsule's one aspect auto-split at resolution | The "edge" feature isn't small — research the split aspects under the band-2 lens policy and flag the band/size mismatch in the summary. |
 
 ## Resumability
 
