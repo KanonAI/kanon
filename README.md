@@ -49,6 +49,8 @@ access granted to your app's site) is only needed for the optional
 | `/kanon:scan [--next \| feature] [slug]` | Deep-dive approved features from your code into grounded guides (research → aspects → dives → assemble → push) — all of them by default, `--next` to pick one interactively, or name a feature |
 | `/kanon:push [bundle]` | Validate and POST the bundle to `/api/ingest`; returns the review URL |
 | `/kanon:status` | What's approved, what's proposed, did the last push land |
+| `/kanon:work [change \| ENG-42 \| --next]` | Implement a pending change from the knowledge base as a review-ready PR — plan-first for features (`--slice N`, `--plan-only`), draft unless verification is green |
+| `/kanon:worker` | Start the worker daemon: claims tasks queued from the Kanon UI — changes to implement, discovery runs, guide scans — executes them headlessly in git worktrees, streams a live trace back, and reports the outcome (a PR, or pushed proposals). Code never leaves the machine |
 
 State lives in your project's `.kanon/` (gitignore it):
 `config.json` holds `{url, repoSlug, targetUrl, role}` — never the token.

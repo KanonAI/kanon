@@ -1,44 +1,50 @@
 # Example: the shape of a golden output
 
 A trimmed outline of a real, human-approved taxonomy for an all-in-one
-finance/HR platform. Note the properties, not the content: two spaces + a
-cross-cutting layer, capability-named domains, route-anchored features,
-consistent granularity.
+finance/HR platform. Note the **properties**, not the content: six domains each
+holding 4–6 features, **no `space` layer at all**, features named for the thing
+the user manages, and each one spanning that thing's whole lifecycle.
 
-## Space: Finance
-
-- **Banking & Cash Management** — routes `/v2/banking/home`, `/v2/banking/treasury`
+- **Banking & Cash Management**
   - Business Checking (`/v2/banking/home`) — available vs reserved balance,
     balance trend chart, account details, autopilot settings
-  - Treasury / Cash Management (`/v2/banking/treasury`) — yield on idle cash,
-    live rates, positions table, Buy/Withdraw, interest & fees history
+  - Treasury (`/v2/banking/treasury`) — yield on idle cash, live rates,
+    positions, Buy/Withdraw, interest & fees history
   - Money Movement — ACH, domestic & international wires, book transfers
-- **Corporate Cards** — routes `/v2/banking/credit`, `/v2/banking/cards`
-  - Company Cards — issue virtual & physical, freeze, set PIN,
-    statuses: Active / Frozen / Inactive / Pending / Closed
+  - External Accounts — link via Plaid, linked balances
+- **Corporate Cards & Spend**
+  - Company Cards — issue virtual & physical, freeze, set PIN, statuses
+    Active / Frozen / Inactive / Pending / Closed
   - Card Controls — spend limits, budgets, per-card tracking
-- **Spend Management** — route `/v2/banking/transactions`
-  - Transactions Ledger — unified feed, filters, export
+  - Transactions Ledger (`/v2/banking/transactions`) — unified feed, filters,
+    export
   - Receipts — capture, "Missing Receipt" flags, require-receipt policies
     *(merged from three screens that touch receipts)*
-
-## Space: People Ops
-
-- **Payroll** — routes `/v2/payroll`, `/v2/settings/payroll`
-  - Pay Runs — Draft / Overdue / Failed / Paid
+  - Rewards & Cashback — earn rates, redemption
+- **Bill Pay & Accounting**
+  - Bills & Reimbursements · Vendors · Ledger Sync · Bookkeeping Service ·
+    Reports
+- **Payroll & Time**
+  - Pay Runs (`/v2/payroll`) — Draft / Overdue / Failed / Paid
   - Payroll Taxes — federal + per-state settings, tax-filing signatory
-- **People / HR** — route `/v2/people`
-  - Team Directory — employees & contractors, statuses
-  - Employee Profile — tabs: Job & pay · Personal · Time off · Benefits · Docs
-    *(one representative record captured the tab structure)*
+  - Time Off — requests, approvals, policies, holiday calendars
+  - Timesheets — hourly tracking, feeds the pay run
+- **People, Benefits & Documents**
+  - Team Directory · Org Structure · Hiring & Onboarding · Benefits ·
+    Document Templates · Document Vault
+- **Administration & Platform**
+  - Company & Administrators · My Cards · My Transactions · AI Assistant ·
+    Billing
 
-## Admin / Platform (cross-cutting)
+Why this is golden:
 
-- **Administration & Settings** — `/v2/settings/*` *(each sub-page swept)*
-- **Platform** — AI assistant, global search, dashboard widgets,
-  multi-entity switcher *(captured once, spans every domain)*
-
-Why this is golden: every feature maps to a real route (traceable), names are
-capabilities not slugs (searchable), buried functions were promoted
-(Accounting lived under Settings), and the app's own Finance/People split
-survived as spaces (familiar to its users).
+- **Six domains, 4–6 features each.** Nothing wraps a single feature.
+- **No `space`.** Six domains do not need a layer above them — it would just
+  repeat the list. The app's own Finance / People Ops split survives *inside the
+  domain names*. A space layer earns its place at 10+ domains.
+- **Features are things, not pages.** "Pay Runs" covers the list, a single run,
+  the approval flow and its API. There is no "Pay run detail" entry.
+- **Merges are visible.** Receipts came from three screens; Bill Pay and
+  Accounting were separate thin domains until they were folded together.
+- **No machinery.** The API routes, workers and webhooks are inside the
+  boundaries of the features they serve, not siblings of them.

@@ -5,7 +5,7 @@ description: >
   a feature, then implement it, verify, and open a PR. Use for "work on the
   next change", "implement ENG-42", "fix the next ticket", "work on the next
   item", "plan the feature", "implement slice 1".
-argument-hint: "[change-id | linear-id | --next] [--slice N] [--plan-only]"
+argument-hint: "[change-id | linear-id | --next] [--slice N] [--plan-only] [--non-interactive]"
 ---
 
 # Kanon Work
@@ -13,6 +13,23 @@ argument-hint: "[change-id | linear-id | --next] [--slice N] [--plan-only]"
 Pick up a pending product change, plan it if it's a feature (or execute an
 existing plan), implement it, verify, and open a review-ready PR. Nothing
 auto-merges.
+
+## Non-interactive mode (the worker daemon)
+
+`--non-interactive` means NO ONE is watching: the Kanon worker daemon runs
+this skill headlessly for a task queued from the Kanon UI. Three rules
+replace every "ask the user" below:
+
+1. **Never wait for confirmation.** Skip the step-1 "Shall I proceed?".
+2. **Unknown change type → feature path.** Planning first is the safe
+   default; never ask.
+3. **The PR is a DRAFT unless verification is fully green.** When in doubt,
+   draft — a human promotes it.
+
+Additionally, when the env var `KANON_TASK_BRANCH` is set, the daemon already
+created and checked out that branch in a dedicated worktree — **skip
+`git checkout -b` entirely** and work on the current branch. Use
+`$KANON_TASK_BRANCH` as `{branchName}` everywhere (push, PR head).
 
 ## 1. Select the change
 
@@ -33,7 +50,8 @@ Show the user what you're about to work on:
 > **Source:** {linearIdentifier ?? "KB change"} · {direction}
 > **Summary:** {summary}
 
-Ask: "Shall I proceed?" Wait for confirmation.
+Ask: "Shall I proceed?" Wait for confirmation. (`--non-interactive`: skip the
+question, print the block, and proceed immediately.)
 
 ## 2. Route by change type
 
@@ -43,6 +61,8 @@ Determine the change type from the title prefix or content:
 - Starts with `Add:` or is labeled `feature` → **feature path** (step 3)
 - If a `--slice` was passed → **slice execution** (step 4)
 - Unknown → ask the user: "Is this a bug fix, an improvement, or a new feature?"
+  (`--non-interactive`: never ask — take the feature path, planning first is
+  the safe default.)
 
 ## 3. Feature planning (features only)
 
@@ -176,7 +196,8 @@ When all slices are complete, mark the change as resolved.
 
 Mark as implementing: call `kanon_update_change` with `status: "implementing"`.
 
-Create a working branch:
+Create a working branch — UNLESS `KANON_TASK_BRANCH` is set (the daemon's
+worktree is already on it; use it as `{branchName}` and skip the checkout):
 ```bash
 git checkout -b {branchName} main
 ```
@@ -270,7 +291,11 @@ for the full plan."}
 gh pr create --base main --head {branchName} --title "{title}" --body-file .pr-body.md --draft
 ```
 
-Draft if verification failed. Ready if all green.
+Draft if verification failed. Ready if all green. (`--non-interactive`:
+ALWAYS `--draft` unless typecheck, lint, AND tests all passed.)
+
+At the very end, print the PR URL on its own line — the daemon extracts it
+from the transcript to report back to the Kanon UI.
 
 ## 8. Finalize
 

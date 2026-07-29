@@ -5,15 +5,35 @@ description: >
   Claude in Chrome) to build a Kanon taxonomy proposal (domains →
   features → capabilities). Use for "discover my app", "crawl the product",
   "build the knowledge base", "map what our app does".
-argument-hint: "[target-url (only needed with --refine)] [repo-slug] [--refine (adds browser crawl)] [--auto-approve]"
+argument-hint: "[target-url (only needed with --refine)] [repo-slug] [--refine (adds browser crawl)] [--auto-approve] [--non-interactive]"
 disable-model-invocation: true
 ---
 
 # Kanon Discover
 
+## Non-interactive mode (the worker daemon)
+
+`--non-interactive` means NO ONE is watching — the Kanon worker daemon is
+running this headlessly for a task queued from the Kanon UI:
+
+1. **Never ask anything.** Repo slug and server URL come from
+   `KANON_REPO_SLUG` / `KANON_URL` in the environment; if the slug is
+   genuinely missing, fail with a clear message rather than waiting.
+2. **Always code-only.** Never crawl (`--refine` is ignored — there is no
+   browser), never ask for a target URL.
+3. **Push without asking.** After assembly, validate and push the bundle
+   directly (`kanon_push_bundle`) instead of handing off to `/kanon:push`'s
+   confirmation.
+4. **Never auto-approve.** The result lands as proposals; a human reviews
+   them in the Kanon UI. `--auto-approve` remains a deliberate, separate
+   flag that the worker never passes.
+5. End by printing the review URL on its own line.
+
 Turn the codebase into a **taxonomy proposal**: analyze routes, navigation
-components, middleware guards, schemas, and module structure to build a
-capability-oriented taxonomy. Optionally **refine** by crawling the running
+components, middleware guards, schemas, module structure and the product's own
+documentation to build a capability-oriented taxonomy at the altitude a founder
+or PM can read — domains a stakeholder would name, features that are things the
+user manages rather than pages the app happens to have. Optionally **refine** by crawling the running
 app in Chrome (pass `--refine`) to corroborate with what
 users actually see. The bundle is pushed later with `/kanon:push`; it
 lands as **proposals for human review**, never as published fact. Fidelity
@@ -159,9 +179,23 @@ proposal by reading key files directly:
    have for a feature's `space`, and it groups directories the routes don't.
    Cite it as `ownership` evidence.
 
+8. **Product vocabulary**: read the README's opening paragraph, the package
+   description, and the titles of any published docs pages (`content/docs/**`,
+   `docs/**` with front-matter). This is the only place the team's own words for
+   what they SELL appear — everything else in this list is code structure, and a
+   taxonomy built from code structure alone can only be named after the code.
+
 Record your findings in `proposal.json` using the synthesis rules (read
 synthesis.md). Include evidence references pointing to the actual source
 files you read.
+
+**The unit is a job, not a page.** A feature is a thing the user manages, across
+its whole lifecycle — its list, detail, create flow, settings tab and API are
+ONE feature. The server checks this deterministically and will reject a proposal
+that breaks it: 5–12 domains, ≥3 features each, `space` empty below 10 domains,
+no feature named after its parent, after machinery (`…-api`, `…-service`) or
+after a screen type (`…-page`, `…-list`). See synthesis.md for the full list —
+it is cheaper to follow than to have bounced back.
 
 ### 3a. Mapper fan-out (any codebase you can't read in one pass)
 

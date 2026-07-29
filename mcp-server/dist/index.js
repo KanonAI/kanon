@@ -14606,7 +14606,19 @@ function baseFromFinalUrl(finalUrl, path) {
     return void 0;
   }
 }
-async function request(target, method, path, body, meta) {
+var DEFAULT_TIMEOUT_MS = 3e4;
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var isTransient = (f) => f.status === 0 || f.status === 429 || f.status >= 500;
+async function request(target, method, path, body, meta, opts) {
+  const retries = opts?.retries ?? 0;
+  for (let attempt = 0; ; attempt++) {
+    const r = await requestOnce(target, method, path, body, meta, opts);
+    if (r.ok || !isTransient(r) || attempt >= retries) return r;
+    const backoff = Math.min(500 * 2 ** attempt, 1e4);
+    await sleep(backoff + Math.random() * 250);
+  }
+}
+async function requestOnce(target, method, path, body, meta, opts) {
   const base = target.url.replace(/\/$/, "");
   let res;
   try {
@@ -14616,13 +14628,15 @@ async function request(target, method, path, body, meta) {
         ...target.token ? { authorization: `Bearer ${target.token}` } : {},
         ...body !== void 0 ? { "content-type": "application/json" } : {}
       },
-      ...body !== void 0 ? { body: JSON.stringify(body) } : {}
+      ...body !== void 0 ? { body: JSON.stringify(body) } : {},
+      signal: AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     });
   } catch (e) {
+    const timedOut = e instanceof Error && e.name === "TimeoutError";
     return {
       ok: false,
       status: 0,
-      error: `cannot reach ${target.url}: ${e instanceof Error ? e.message : String(e)}`,
+      error: timedOut ? `request to ${target.url} timed out` : `cannot reach ${target.url}: ${e instanceof Error ? e.message : String(e)}`,
       guidance: "check the server URL (KANON_URL / .kanon/config.json) and that the Kanon server is running; run /kanon:setup to (re)configure"
     };
   }
@@ -19678,6 +19692,42 @@ function computeReachableSet(input) {
   return { files: all, frontier: all.filter((f) => f.reason !== "seed") };
 }
 var rank = (r) => r === "seed" ? 0 : r === "calls-in" ? 1 : 2;
+
+// ../../../src/domain/billing/plan.ts
+var STARTER_FEATURES = [];
+var TEAM_FEATURES = [
+  "linear_integration",
+  "github_private_repos",
+  "experiments_page",
+  "testing_plan",
+  "work_command",
+  "unlimited_chat",
+  "api_access"
+];
+var PLANS = {
+  starter: {
+    id: "starter",
+    name: "Starter",
+    seatLimit: 3,
+    repoLimit: 1,
+    featureLimit: 5,
+    // 5 features at the $1-5/scan the pricing page quotes is ~$25. $50 leaves
+    // room for re-scans and still caps a runaway at the price of a lunch.
+    monthlySpendCents: 5e3,
+    features: new Set(STARTER_FEATURES)
+  },
+  team: {
+    id: "team",
+    name: "Team",
+    seatLimit: 999,
+    // effectively unlimited, but Stripe bills per seat
+    repoLimit: 999,
+    featureLimit: 999,
+    monthlySpendCents: 2e5,
+    // $2,000
+    features: new Set(TEAM_FEATURES)
+  }
+};
 
 // src/scan/graph.ts
 import { readFile as readFile3 } from "node:fs/promises";

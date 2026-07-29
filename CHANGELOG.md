@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.19.0 — 2026-07-28
+
+**The worker daemon: execute Kanon-queued tasks without opening Claude Code.**
+`node dist/cli.js daemon` turns any box with this plugin's auth into a worker:
+it polls the Kanon API for tasks queued from the UI ("Run with worker" on a
+pending change), creates a git worktree per task on a server-derived branch,
+runs `/kanon:work <change> --non-interactive` headlessly through your own
+`claude` CLI, streams a live activity trace back to the Kanon session view,
+and reports the PR it opened. Cancel from the UI stops the session; a killed
+daemon's tasks fail honestly via lease expiry (nothing silently re-runs).
+
+The worker runs the WHOLE pipeline, not just changes: the Kanon UI can queue
+**discovery** (code-only, proposals land for review) and **guide scans**
+(all approved features, honoring the freshness pre-skip) alongside change
+tasks — so discover → review → scan → work runs end-to-end from the browser.
+Discover/scan tasks execute in detached worktrees; review stays a human gate.
+
+`/kanon:work`, `/kanon:discover`, and `/kanon:scan` gain `--non-interactive`
+(skip confirmations; work: unknown type → plan-first, draft PR unless
+verification is fully green; discover: code-only, push without asking, never
+auto-approve; scan: full sweep, report instead of prompting). `/kanon:work`
+honors `KANON_TASK_BRANCH` (the daemon's worktree is already on the branch).
+The API client now has request timeouts and jittered retries on transient
+failures.
+
+Code never leaves your machine — Kanon receives one-line activity labels and
+the PR URL, nothing else.
+
 ## 0.15.0 — 2026-07-27
 
 **The default instance is now `https://gokanon.com`** — the apex, which is the

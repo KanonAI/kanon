@@ -6,8 +6,8 @@ var __export = (target, all) => {
 };
 
 // src/cli.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync3, readFileSync as readFileSync8, writeFileSync as writeFileSync4 } from "node:fs";
-import { join as join14, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync6, mkdirSync as mkdirSync4, readFileSync as readFileSync9, writeFileSync as writeFileSync5 } from "node:fs";
+import { join as join15, resolve as resolve2 } from "node:path";
 
 // src/api.ts
 var GUIDANCE = {
@@ -33,7 +33,19 @@ function baseFromFinalUrl(finalUrl, path) {
     return void 0;
   }
 }
-async function request(target, method, path, body, meta) {
+var DEFAULT_TIMEOUT_MS = 3e4;
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var isTransient = (f) => f.status === 0 || f.status === 429 || f.status >= 500;
+async function request(target, method, path, body, meta, opts) {
+  const retries = opts?.retries ?? 0;
+  for (let attempt = 0; ; attempt++) {
+    const r = await requestOnce(target, method, path, body, meta, opts);
+    if (r.ok || !isTransient(r) || attempt >= retries) return r;
+    const backoff = Math.min(500 * 2 ** attempt, 1e4);
+    await sleep(backoff + Math.random() * 250);
+  }
+}
+async function requestOnce(target, method, path, body, meta, opts) {
   const base = target.url.replace(/\/$/, "");
   let res;
   try {
@@ -43,13 +55,15 @@ async function request(target, method, path, body, meta) {
         ...target.token ? { authorization: `Bearer ${target.token}` } : {},
         ...body !== void 0 ? { "content-type": "application/json" } : {}
       },
-      ...body !== void 0 ? { body: JSON.stringify(body) } : {}
+      ...body !== void 0 ? { body: JSON.stringify(body) } : {},
+      signal: AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     });
   } catch (e) {
+    const timedOut = e instanceof Error && e.name === "TimeoutError";
     return {
       ok: false,
       status: 0,
-      error: `cannot reach ${target.url}: ${e instanceof Error ? e.message : String(e)}`,
+      error: timedOut ? `request to ${target.url} timed out` : `cannot reach ${target.url}: ${e instanceof Error ? e.message : String(e)}`,
       guidance: "check the server URL (KANON_URL / .kanon/config.json) and that the Kanon server is running; run /kanon:setup to (re)configure"
     };
   }
@@ -130,6 +144,36 @@ async function pushTests(config2, coverage, repoSlug) {
     ...coverage,
     repoSlug
   });
+}
+function claimTask(config2, input) {
+  return request(
+    config2,
+    "POST",
+    "/api/worker/claim",
+    input,
+    void 0,
+    { retries: 2 }
+  );
+}
+function postTaskEvents(config2, taskId, input) {
+  return request(
+    config2,
+    "POST",
+    `/api/worker/tasks/${encodeURIComponent(taskId)}/events`,
+    input,
+    void 0,
+    { retries: 2 }
+  );
+}
+function completeWorkerTask(config2, taskId, input) {
+  return request(
+    config2,
+    "POST",
+    `/api/worker/tasks/${encodeURIComponent(taskId)}/complete`,
+    input,
+    void 0,
+    { retries: 3 }
+  );
 }
 
 // src/assemble.ts
@@ -1641,9 +1685,489 @@ function pluginVersion(pluginRoot) {
   }
 }
 
-// src/scan/assemble-guide.ts
-import { existsSync as existsSync4, readFileSync as readFileSync6, readdirSync as readdirSync3, writeFileSync as writeFileSync3 } from "node:fs";
+// src/daemon/daemon.ts
+import { spawn, execFile as execFile2 } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync6, writeFileSync as writeFileSync3 } from "node:fs";
+import { hostname } from "node:os";
 import { join as join6 } from "node:path";
+import { createInterface } from "node:readline";
+import { promisify as promisify2 } from "node:util";
+
+// src/scan/git.ts
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+var exec = promisify(execFile);
+async function git(cwd, args2) {
+  try {
+    const { stdout } = await exec("git", args2, {
+      cwd,
+      maxBuffer: 64 * 1024 * 1024
+    });
+    return stdout;
+  } catch {
+    return null;
+  }
+}
+async function gitRoot(cwd) {
+  const out = await git(cwd, ["rev-parse", "--show-toplevel"]);
+  return out ? out.trim() : null;
+}
+async function gitHead(cwd) {
+  const out = await git(cwd, ["rev-parse", "HEAD"]);
+  const sha = out?.trim();
+  return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
+}
+async function gitDirty(cwd) {
+  const out = await git(cwd, ["status", "--porcelain"]);
+  if (out === null) return null;
+  return out.trim().length > 0;
+}
+async function gitListFiles(cwd) {
+  const out = await git(cwd, [
+    "ls-files",
+    "-z",
+    "--cached",
+    "--others",
+    "--exclude-standard"
+  ]);
+  if (out === null) return null;
+  return out.split("\0").filter((p) => p.length > 0);
+}
+
+// src/daemon/stream.ts
+var SAFE_INPUT_KEYS = [
+  "file_path",
+  "path",
+  "pattern",
+  "query",
+  "url",
+  "description"
+];
+var oneLine = (s, max = 180) => {
+  const first = s.trim().split("\n")[0] ?? "";
+  return first.length > max ? `${first.slice(0, max - 1)}\u2026` : first;
+};
+function toolSummary(name, input) {
+  if (typeof input !== "object" || input === null) return { label: name };
+  const o = input;
+  if (typeof o.command === "string") {
+    return { label: `${name}: ${oneLine(o.command, 120)}` };
+  }
+  for (const key of SAFE_INPUT_KEYS) {
+    if (typeof o[key] === "string") {
+      return { label: `${name}: ${oneLine(o[key], 120)}` };
+    }
+  }
+  return { label: name };
+}
+function activitiesFromLine(line) {
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return [];
+  let event;
+  try {
+    event = JSON.parse(trimmed);
+  } catch {
+    return [];
+  }
+  if (event.type === "system" && event.subtype === "init") {
+    const model = typeof event.model === "string" ? ` (${event.model})` : "";
+    return [{ kind: "status", label: `Claude Code session started${model}` }];
+  }
+  if (event.type === "assistant") {
+    const message = event.message;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    const out = [];
+    for (const block of content) {
+      if (block.type === "text" && typeof block.text === "string") {
+        const label = oneLine(block.text);
+        if (label.length > 0) out.push({ kind: "thought", label });
+      } else if (block.type === "tool_use" && typeof block.name === "string") {
+        out.push({ kind: "tool", ...toolSummary(block.name, block.input) });
+      }
+    }
+    return out;
+  }
+  if (event.type === "result") {
+    const errored = event.is_error === true || event.subtype !== "success";
+    return [
+      {
+        kind: errored ? "error" : "status",
+        label: errored ? `session ended with an error${typeof event.subtype === "string" ? ` (${event.subtype})` : ""}` : "session completed"
+      }
+    ];
+  }
+  return [];
+}
+function resultTextFromLine(line) {
+  try {
+    const event = JSON.parse(line.trim());
+    if (event.type === "result" && typeof event.result === "string") {
+      return event.result;
+    }
+  } catch {
+  }
+  return null;
+}
+var PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/g;
+function extractPrUrl(text) {
+  let match;
+  let last = null;
+  while ((match = PR_URL_RE.exec(text)) !== null) {
+    last = { prUrl: match[0], prNumber: Number(match[1]) };
+  }
+  return last;
+}
+
+// src/daemon/daemon.ts
+var execFileAsync = promisify2(execFile2);
+var DEFAULT_TASK_TIMEOUT_MINUTES = 30;
+var FLUSH_INTERVAL_MS = 2e3;
+var FLUSH_BATCH_SIZE = 20;
+var MAX_BUFFERED_ACTIVITIES = 500;
+var IDLE_POLL_FALLBACK_SECONDS = 5;
+var ERROR_POLL_SECONDS = 30;
+var log = (msg2) => console.log(`[kanon-daemon ${(/* @__PURE__ */ new Date()).toISOString()}] ${msg2}`);
+function loadWorkerId(env = process.env) {
+  const path = join6(kanonHome(env), "worker.json");
+  try {
+    const parsed = JSON.parse(readFileSync6(path, "utf8"));
+    if (typeof parsed.workerId === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(parsed.workerId)) {
+      return parsed.workerId;
+    }
+  } catch {
+  }
+  const workerId = `wrk_${randomBytes(12).toString("base64url")}`;
+  mkdirSync3(kanonHome(env), { recursive: true, mode: 448 });
+  writeFileSync3(
+    path,
+    `${JSON.stringify({ workerId, createdAt: (/* @__PURE__ */ new Date()).toISOString() }, null, 2)}
+`,
+    { mode: 384 }
+  );
+  return workerId;
+}
+async function git2(cwd, args2) {
+  const { stdout } = await execFileAsync("git", args2, { cwd });
+  return stdout.trim();
+}
+async function defaultBranch(repoRoot2) {
+  try {
+    const ref = await git2(repoRoot2, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    return ref.replace(/^origin\//, "");
+  } catch {
+    return "main";
+  }
+}
+async function preflight(repoRoot2) {
+  const checks = [
+    ["claude", ["--version"]],
+    ["gh", ["auth", "status"]],
+    ["git", ["--version"]]
+  ];
+  for (const [cmd, args2] of checks) {
+    try {
+      await execFileAsync(cmd, args2, { cwd: repoRoot2 });
+    } catch (e) {
+      throw new Error(
+        `preflight failed: \`${cmd} ${args2.join(" ")}\` \u2014 ${e instanceof Error ? e.message.split("\n")[0] : e}`
+      );
+    }
+  }
+  await git2(repoRoot2, ["remote", "get-url", "origin"]);
+}
+async function createWorktree(repoRoot2, taskId, branch) {
+  const dir = join6(repoRoot2, ".kanon", "worktrees", taskId);
+  await git2(repoRoot2, ["fetch", "origin", "--prune"]);
+  const base = await defaultBranch(repoRoot2);
+  if (branch === null) {
+    await git2(repoRoot2, ["worktree", "add", "--detach", dir, `origin/${base}`]);
+    return dir;
+  }
+  try {
+    await git2(repoRoot2, ["worktree", "add", dir, "-b", branch, `origin/${base}`]);
+  } catch {
+    await git2(repoRoot2, ["worktree", "add", dir, branch]);
+  }
+  return dir;
+}
+async function removeWorktree(repoRoot2, dir) {
+  try {
+    await git2(repoRoot2, ["worktree", "remove", "--force", dir]);
+  } catch (e) {
+    log(`could not remove worktree ${dir}: ${e instanceof Error ? e.message.split("\n")[0] : e}`);
+  }
+}
+function buildPrompt(task) {
+  switch (task.type) {
+    case "work_change": {
+      const parts = [`/kanon:work ${task.payload.changeId}`, "--non-interactive"];
+      if (task.payload.sliceN !== void 0) parts.push(`--slice ${task.payload.sliceN}`);
+      if (task.payload.planOnly) parts.push("--plan-only");
+      return parts.join(" ");
+    }
+    case "discover":
+      return "/kanon:discover --non-interactive";
+    case "scan":
+      return task.payload.feature ? `/kanon:scan ${task.payload.feature} --non-interactive` : "/kanon:scan --non-interactive";
+  }
+}
+var isChangeTask = (task) => task.type === "work_change";
+function taskDescriptor(task) {
+  switch (task.type) {
+    case "work_change":
+      return `change ${task.payload.changeId}, branch ${task.payload.branch}`;
+    case "discover":
+      return "discovery (code-only)";
+    case "scan":
+      return task.payload.feature ? `scan ${task.payload.feature}` : "scan all approved";
+  }
+}
+async function executeTask(api, workerId, repoRoot2, task) {
+  log(`task ${task.id}: claimed (${taskDescriptor(task)})`);
+  let seq = 0;
+  let buffer = [];
+  let leaseLost = false;
+  let cancelled = false;
+  let child = null;
+  let transcript = "";
+  const push = (a) => {
+    if (buffer.length >= MAX_BUFFERED_ACTIVITIES) buffer.shift();
+    buffer.push({ ...a, seq: ++seq });
+  };
+  const flush = async () => {
+    if (leaseLost) return;
+    const batch = buffer.slice(0, FLUSH_BATCH_SIZE * 2);
+    const r = await postTaskEvents(api, task.id, {
+      repoSlug: task.repoSlug,
+      workerId,
+      activities: batch
+    });
+    if (!r.ok) {
+      if (r.status === 409) {
+        leaseLost = true;
+        log(`task ${task.id}: lease lost \u2014 stopping`);
+        child?.kill("SIGTERM");
+      }
+      return;
+    }
+    buffer = buffer.slice(batch.length);
+    if (r.cancelRequested && !cancelled) {
+      cancelled = true;
+      log(`task ${task.id}: cancel requested \u2014 stopping the session`);
+      push({ kind: "status", label: "cancel requested \u2014 stopping" });
+      child?.kill("SIGTERM");
+      setTimeout(() => child?.kill("SIGKILL"), 1e4).unref();
+    }
+  };
+  const outcome = await new Promise((resolvePromise) => {
+    void (async () => {
+      const branch = isChangeTask(task) ? task.payload.branch ?? null : null;
+      let worktree;
+      try {
+        worktree = await createWorktree(repoRoot2, task.id, branch);
+      } catch (e) {
+        resolvePromise({
+          outcome: "failed",
+          errorMessage: `could not create worktree: ${e instanceof Error ? e.message.split("\n")[0] : e}`,
+          prUrl: null,
+          prNumber: null,
+          summary: null
+        });
+        return;
+      }
+      push({
+        kind: "status",
+        label: branch ? `worktree ready on ${branch}` : "worktree ready (detached, read-only)"
+      });
+      const defaultTimeout = task.type === "scan" ? 240 : task.type === "discover" ? 60 : DEFAULT_TASK_TIMEOUT_MINUTES;
+      const timeoutMinutes = Number(
+        process.env.KANON_TASK_TIMEOUT_MINUTES ?? defaultTimeout
+      );
+      let timedOut = false;
+      child = spawn(
+        "claude",
+        [
+          "-p",
+          buildPrompt(task),
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--permission-mode",
+          "acceptEdits"
+        ],
+        {
+          cwd: worktree,
+          // A fresh worktree has no .kanon/config.json (untracked files don't
+          // follow), so the child's MCP server would resolve NO server URL or
+          // slug. Hand both down explicitly; the token then resolves from
+          // ~/.kanon/credentials.json keyed by that URL, same as always.
+          env: {
+            ...process.env,
+            KANON_URL: api.url,
+            KANON_REPO_SLUG: task.repoSlug,
+            ...branch ? { KANON_TASK_BRANCH: branch } : {}
+          },
+          stdio: ["ignore", "pipe", "pipe"]
+        }
+      );
+      const timeout = setTimeout(
+        () => {
+          timedOut = true;
+          log(`task ${task.id}: timed out after ${timeoutMinutes}m`);
+          child?.kill("SIGTERM");
+          setTimeout(() => child?.kill("SIGKILL"), 1e4).unref();
+        },
+        timeoutMinutes * 60 * 1e3
+      );
+      const flusher = setInterval(() => void flush(), FLUSH_INTERVAL_MS);
+      let stderrTail = "";
+      child.stderr?.on("data", (chunk) => {
+        stderrTail = (stderrTail + chunk.toString()).slice(-2e3);
+      });
+      const rl = createInterface({ input: child.stdout });
+      rl.on("line", (line) => {
+        for (const a of activitiesFromLine(line)) push(a);
+        const resultText = resultTextFromLine(line);
+        if (resultText !== null) transcript += `
+${resultText}`;
+        else if (line.includes("github.com")) transcript += `
+${line}`;
+        if (buffer.length >= FLUSH_BATCH_SIZE) void flush();
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        clearInterval(flusher);
+        void (async () => {
+          while (buffer.length > 0 && !leaseLost) {
+            const before = buffer.length;
+            await flush();
+            if (buffer.length >= before) break;
+          }
+          let pr = isChangeTask(task) ? extractPrUrl(transcript) : null;
+          if (isChangeTask(task) && !pr && code === 0) {
+            try {
+              const { stdout } = await execFileAsync(
+                "gh",
+                ["pr", "view", "--json", "url,number"],
+                { cwd: worktree }
+              );
+              const parsed = JSON.parse(stdout);
+              if (parsed.url) pr = { prUrl: parsed.url, prNumber: parsed.number ?? 0 };
+            } catch {
+            }
+          }
+          const succeeded = code === 0 && !timedOut && !cancelled;
+          if (succeeded) await removeWorktree(repoRoot2, worktree);
+          else log(`task ${task.id}: keeping worktree for debugging: ${worktree}`);
+          const summary = !succeeded ? null : task.type === "discover" ? "Discovery pushed \u2014 review the proposals" : task.type === "scan" ? task.payload.feature ? `Scanned ${task.payload.feature}` : "Scanned all approved features" : `Completed ${task.payload.changeId}`;
+          resolvePromise({
+            outcome: cancelled ? "cancelled" : succeeded ? "succeeded" : "failed",
+            errorMessage: succeeded || cancelled ? null : timedOut ? `task timed out after ${timeoutMinutes} minutes` : `claude exited with code ${code}${stderrTail ? ` \u2014 ${stderrTail.slice(-300)}` : ""}`,
+            prUrl: pr?.prUrl ?? null,
+            prNumber: pr?.prNumber ?? null,
+            summary
+          });
+        })();
+      });
+    })();
+  });
+  if (leaseLost) return;
+  const done = await completeWorkerTask(api, task.id, {
+    repoSlug: task.repoSlug,
+    workerId,
+    outcome: outcome.outcome,
+    result: {
+      prUrl: outcome.prUrl,
+      prNumber: outcome.prNumber,
+      branch: task.payload.branch ?? null,
+      summary: outcome.summary,
+      errorMessage: outcome.errorMessage
+    }
+  });
+  if (!done.ok) {
+    log(`task ${task.id}: complete failed (${done.status}): ${done.error}`);
+    return;
+  }
+  log(
+    `task ${task.id}: ${outcome.outcome}${outcome.prUrl ? ` \u2014 ${outcome.prUrl}` : ""}${outcome.errorMessage ? ` \u2014 ${outcome.errorMessage}` : ""}`
+  );
+}
+function parseDaemonArgs(args2) {
+  const opts = {};
+  for (let i = 0; i < args2.length; i++) {
+    if (args2[i] === "--repo" && args2[i + 1]) opts.repoPath = args2[++i];
+  }
+  return opts;
+}
+async function runDaemon(options) {
+  const config2 = resolveConfig();
+  if (!config2.url) throw new Error("no server URL \u2014 run /kanon:setup or set KANON_URL");
+  if (!config2.token) throw new Error("not signed in \u2014 run /kanon:setup or set KANON_API_TOKEN");
+  const api = { url: config2.url, token: config2.token };
+  const cwd = options.repoPath ?? process.cwd();
+  const repoRoot2 = await gitRoot(cwd) ?? cwd;
+  if (!existsSync4(join6(repoRoot2, ".git"))) {
+    throw new Error(`${repoRoot2} is not a git repository`);
+  }
+  const repoSlug = resolveConfig(process.env, repoRoot2).repoSlug;
+  if (!repoSlug) {
+    throw new Error(
+      "no repoSlug \u2014 run the daemon from a repo with .kanon/config.json, or set KANON_REPO_SLUG"
+    );
+  }
+  await preflight(repoRoot2);
+  const workerId = loadWorkerId();
+  let version;
+  try {
+    version = pluginVersion(config2.pluginRoot);
+  } catch {
+  }
+  log(`worker ${workerId} serving ${repoSlug} from ${repoRoot2} (server: ${api.url})`);
+  let running = null;
+  let stopping = false;
+  const stop = (signal) => {
+    log(`received ${signal} \u2014 shutting down${running ? " after the current task" : ""}`);
+    stopping = true;
+  };
+  process.on("SIGINT", () => stop("SIGINT"));
+  process.on("SIGTERM", () => stop("SIGTERM"));
+  for (; ; ) {
+    if (stopping) {
+      if (running) await running;
+      log("stopped");
+      process.exit(0);
+    }
+    const claim = await claimTask(api, {
+      workerId,
+      hostname: hostname(),
+      ...version ? { version } : {},
+      repoSlugs: [repoSlug]
+    });
+    if (!claim.ok) {
+      log(`claim failed (${claim.status}): ${claim.error}${claim.guidance ? ` \u2014 ${claim.guidance}` : ""}`);
+      if (claim.status === 401 || claim.status === 403) process.exit(1);
+      await sleep2(ERROR_POLL_SECONDS * 1e3);
+      continue;
+    }
+    if (claim.deniedRepoSlugs.length > 0) {
+      log(`WARNING: not authorized for: ${claim.deniedRepoSlugs.join(", ")}`);
+    }
+    if (claim.task) {
+      running = executeTask(api, workerId, repoRoot2, claim.task);
+      await running;
+      running = null;
+      continue;
+    }
+    const base = (claim.retryAfterSeconds || IDLE_POLL_FALLBACK_SECONDS) * 1e3;
+    await sleep2(base + Math.random() * 1e3);
+  }
+}
+var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// src/scan/assemble-guide.ts
+import { existsSync as existsSync5, readFileSync as readFileSync7, readdirSync as readdirSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { join as join7 } from "node:path";
 
 // ../../../src/usecases/feature-boundary.ts
 function matchesGlob(path, glob) {
@@ -6515,10 +7039,10 @@ function parseArtifact(schema, artifact, raw) {
   return parsed.data;
 }
 function readJson2(runDir, name) {
-  const path = join6(runDir, name);
-  if (!existsSync4(path)) throw new GateError(`missing ${name} in the run dir`);
+  const path = join7(runDir, name);
+  if (!existsSync5(path)) throw new GateError(`missing ${name} in the run dir`);
   try {
-    return JSON.parse(readFileSync6(path, "utf8"));
+    return JSON.parse(readFileSync7(path, "utf8"));
   } catch (e) {
     throw new GateError(
       `${name} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`
@@ -6526,9 +7050,9 @@ function readJson2(runDir, name) {
   }
 }
 function readJsonlLines(runDir, name) {
-  const path = join6(runDir, name);
-  if (!existsSync4(path)) return [];
-  return readFileSync6(path, "utf8").split("\n").map((l) => l.trim()).filter((l) => l.length > 0).map((l, i) => {
+  const path = join7(runDir, name);
+  if (!existsSync5(path)) return [];
+  return readFileSync7(path, "utf8").split("\n").map((l) => l.trim()).filter((l) => l.length > 0).map((l, i) => {
     try {
       return JSON.parse(l);
     } catch {
@@ -6539,7 +7063,7 @@ function readJsonlLines(runDir, name) {
 function readReadPaths(runDir, aspectKey) {
   const out = /* @__PURE__ */ new Set();
   const sources = ["readlog.jsonl"];
-  if (aspectKey) sources.push(join6("readlog", `${aspectKey}.jsonl`));
+  if (aspectKey) sources.push(join7("readlog", `${aspectKey}.jsonl`));
   for (const source of sources) {
     for (const line of readJsonlLines(runDir, source)) {
       const parsed = ReadlogLineSchema.safeParse(line);
@@ -6558,7 +7082,7 @@ function readClaims(runDir, aspectKey) {
     { name: "claims.jsonl", label: "" }
   ];
   if (aspectKey) {
-    const rel = join6("claims", `${aspectKey}.jsonl`);
+    const rel = join7("claims", `${aspectKey}.jsonl`);
     sources.push({ name: rel, label: `${rel} ` });
   }
   for (const { name, label } of sources) {
@@ -6698,8 +7222,8 @@ function groundDive(dive, validRuleKeys, anchorUniverse) {
 }
 function checkAspects(runDir) {
   const { resolved, unassigned, unassignedEntryPoints, splits } = resolveAspects(runDir);
-  writeFileSync3(
-    join6(runDir, "aspects.resolved.json"),
+  writeFileSync4(
+    join7(runDir, "aspects.resolved.json"),
     JSON.stringify(resolved, null, 2)
   );
   const overCap = resolved.length > MAX_ASPECTS;
@@ -6737,7 +7261,7 @@ function checkAspects(runDir) {
   };
 }
 function loadResolvedAspects(runDir) {
-  if (existsSync4(join6(runDir, "aspects.resolved.json"))) {
+  if (existsSync5(join7(runDir, "aspects.resolved.json"))) {
     return z_parseResolved(readJson2(runDir, "aspects.resolved.json"));
   }
   return resolveAspects(runDir).resolved;
@@ -6762,7 +7286,7 @@ function checkDive(runDir, aspectKey) {
   const dive = parseArtifact(
     RunDiveSchema,
     "dive",
-    readJson2(runDir, join6("dives", `${aspectKey}.json`))
+    readJson2(runDir, join7("dives", `${aspectKey}.json`))
   );
   if (dive.aspectKey !== aspectKey) {
     throw new GateError(
@@ -6826,9 +7350,9 @@ function checkDive(runDir, aspectKey) {
   };
 }
 function listAspectJsonl(runDir, subdir) {
-  const dir = join6(runDir, subdir);
-  if (!existsSync4(dir)) return [];
-  return readdirSync3(dir).filter((f) => f.endsWith(".jsonl")).sort().map((f) => join6(subdir, f));
+  const dir = join7(runDir, subdir);
+  if (!existsSync5(dir)) return [];
+  return readdirSync3(dir).filter((f) => f.endsWith(".jsonl")).sort().map((f) => join7(subdir, f));
 }
 function checkMerge(runDir) {
   const claimFiles = listAspectJsonl(runDir, "claims");
@@ -6871,8 +7395,8 @@ function checkMerge(runDir) {
     });
   }
   const mergedClaims = [...byKey.values()];
-  writeFileSync3(
-    join6(runDir, "claims.jsonl"),
+  writeFileSync4(
+    join7(runDir, "claims.jsonl"),
     mergedClaims.map((c) => JSON.stringify(c)).join("\n")
   );
   const readPaths = /* @__PURE__ */ new Set();
@@ -6884,8 +7408,8 @@ function checkMerge(runDir) {
     }
   }
   const mergedReadlog = [...readPaths];
-  writeFileSync3(
-    join6(runDir, "readlog.jsonl"),
+  writeFileSync4(
+    join7(runDir, "readlog.jsonl"),
     mergedReadlog.map((p) => JSON.stringify(p)).join("\n")
   );
   return {
@@ -6958,12 +7482,12 @@ function detectStatusSignals(runDir) {
   } catch {
   }
   try {
-    const dir = join6(runDir, "dives");
-    if (existsSync4(dir)) {
+    const dir = join7(runDir, "dives");
+    if (existsSync5(dir)) {
       for (const name of readdirSync3(dir).filter((n) => n.endsWith(".json")).sort()) {
         try {
           const parsed = RunDiveSchema.safeParse(
-            readJson2(runDir, join6("dives", name))
+            readJson2(runDir, join7("dives", name))
           );
           if (parsed.success && parsed.data.stateMachine) {
             signals.push(
@@ -7197,15 +7721,15 @@ function checkFull(params) {
   const validRuleKeys = new Set(claims.byKey.keys());
   const anchorUniverse = /* @__PURE__ */ new Set([...read, ...closure]);
   for (const aspect of resolved) {
-    const path = join6(runDir, "dives", `${aspect.key}.json`);
-    if (!existsSync4(path)) {
+    const path = join7(runDir, "dives", `${aspect.key}.json`);
+    if (!existsSync5(path)) {
       errors.push(`missing dive for aspect "${aspect.key}"`);
       continue;
     }
     const dive = parseArtifact(
       RunDiveSchema,
       "dive",
-      readJson2(runDir, join6("dives", `${aspect.key}.json`))
+      readJson2(runDir, join7("dives", `${aspect.key}.json`))
     );
     dives.push(dive);
     const g = groundDive(dive, validRuleKeys, anchorUniverse);
@@ -7406,13 +7930,13 @@ function checkFull(params) {
   }
   const fatal = errors.length > 0;
   if (!fatal) {
-    writeFileSync3(join6(runDir, "guide-bundle.json"), JSON.stringify(bundle, null, 2));
+    writeFileSync4(join7(runDir, "guide-bundle.json"), JSON.stringify(bundle, null, 2));
   }
   return {
     check: "full",
     ok: !fatal,
     fatal,
-    bundlePath: fatal ? null : join6(runDir, "guide-bundle.json"),
+    bundlePath: fatal ? null : join7(runDir, "guide-bundle.json"),
     errors,
     warnings,
     schemaErrors,
@@ -7431,7 +7955,7 @@ function checkFull(params) {
 }
 function loadGuideSchema(pluginRoot) {
   return JSON.parse(
-    readFileSync6(join6(pluginRoot, "schemas", "guide-bundle.schema.json"), "utf8")
+    readFileSync7(join7(pluginRoot, "schemas", "guide-bundle.schema.json"), "utf8")
   );
 }
 function checkSchema(artifact) {
@@ -7506,15 +8030,15 @@ function assembleGuide(params) {
 
 // src/scan/facts.ts
 import { writeFile } from "node:fs/promises";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 
 // ../../../src/infrastructure/facts/collect-facts.ts
 import { readFile, readdir as readdir2, stat } from "node:fs/promises";
-import { join as join8 } from "node:path";
+import { join as join9 } from "node:path";
 
 // ../../../src/infrastructure/parsing/walk.ts
 import { readdir } from "node:fs/promises";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 var SKIP_DIRS = /* @__PURE__ */ new Set([
   "node_modules",
   "vendor",
@@ -7535,7 +8059,7 @@ async function walkFiles(dir, ext) {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
     if (e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
-    const p = join7(dir, e.name);
+    const p = join8(dir, e.name);
     if (e.isDirectory()) out.push(...await walkFiles(p, exts));
     else if (exts.some((x) => e.name.endsWith(x))) out.push(p);
   }
@@ -8511,7 +9035,7 @@ var StackFactCollector = class {
     facts.push(...routeFacts);
     const schemaSources = [];
     for (const probe of SCHEMA_PROBES) {
-      const raw = await readOptional(join8(input.localPath, probe.path));
+      const raw = await readOptional(join9(input.localPath, probe.path));
       if (raw) schemaSources.push({ path: probe.path, models: probe.parse(raw) });
     }
     const allModels = schemaSources.flatMap((s) => s.models);
@@ -8622,7 +9146,7 @@ var StackFactCollector = class {
     };
     const seenRoutines = /* @__PURE__ */ new Set();
     for (const rel of await probeCronFiles(input.localPath)) {
-      const yaml = await readOptional(join8(input.localPath, rel));
+      const yaml = await readOptional(join9(input.localPath, rel));
       if (!yaml) continue;
       for (const fact of cronRoutineFacts(rel, yaml, isRelevant, PERSIST_CAP)) {
         if (seenRoutines.has(fact.key)) continue;
@@ -8764,7 +9288,7 @@ async function readSources(root, files) {
   const out = /* @__PURE__ */ new Map();
   for (const rel of files) {
     try {
-      const abs = join8(root, rel);
+      const abs = join9(root, rel);
       const s = await stat(abs);
       if (s.size > MAX_FILE_BYTES) continue;
       out.set(rel, await readFile(abs, "utf8"));
@@ -8785,7 +9309,7 @@ async function probeCronFiles(root) {
   for (const dir of CRON_PROBE_DIRS) {
     let entries = [];
     try {
-      entries = await readdir2(join8(root, dir));
+      entries = await readdir2(join9(root, dir));
     } catch {
       continue;
     }
@@ -8806,7 +9330,7 @@ async function readSeedSql(root, tables) {
   for (const dir of SEED_SQL_DIRS) {
     let paths = [];
     try {
-      paths = await walkFiles(join8(root, dir), ".sql");
+      paths = await walkFiles(join9(root, dir), ".sql");
     } catch {
       continue;
     }
@@ -8939,57 +9463,16 @@ async function collectScanFacts(params) {
   const summary = summarizeFacts(facts);
   if (params.runDir) {
     await writeFile(
-      join9(params.runDir, "facts.json"),
+      join10(params.runDir, "facts.json"),
       JSON.stringify(facts, null, 2)
     );
   }
   return { facts, summary };
 }
 
-// src/scan/git.ts
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-var exec = promisify(execFile);
-async function git(cwd, args2) {
-  try {
-    const { stdout } = await exec("git", args2, {
-      cwd,
-      maxBuffer: 64 * 1024 * 1024
-    });
-    return stdout;
-  } catch {
-    return null;
-  }
-}
-async function gitRoot(cwd) {
-  const out = await git(cwd, ["rev-parse", "--show-toplevel"]);
-  return out ? out.trim() : null;
-}
-async function gitHead(cwd) {
-  const out = await git(cwd, ["rev-parse", "HEAD"]);
-  const sha = out?.trim();
-  return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
-}
-async function gitDirty(cwd) {
-  const out = await git(cwd, ["status", "--porcelain"]);
-  if (out === null) return null;
-  return out.trim().length > 0;
-}
-async function gitListFiles(cwd) {
-  const out = await git(cwd, [
-    "ls-files",
-    "-z",
-    "--cached",
-    "--others",
-    "--exclude-standard"
-  ]);
-  if (out === null) return null;
-  return out.split("\0").filter((p) => p.length > 0);
-}
-
 // src/scan/select.ts
 import { readdir as readdir3 } from "node:fs/promises";
-import { join as join12, relative as relative2 } from "node:path";
+import { join as join13, relative as relative2 } from "node:path";
 
 // ../../../src/usecases/prune-guide-files.ts
 function pruneGuideFiles(params) {
@@ -9094,9 +9577,45 @@ function computeReachableSet(input) {
 }
 var rank = (r) => r === "seed" ? 0 : r === "calls-in" ? 1 : 2;
 
+// ../../../src/domain/billing/plan.ts
+var STARTER_FEATURES = [];
+var TEAM_FEATURES = [
+  "linear_integration",
+  "github_private_repos",
+  "experiments_page",
+  "testing_plan",
+  "work_command",
+  "unlimited_chat",
+  "api_access"
+];
+var PLANS = {
+  starter: {
+    id: "starter",
+    name: "Starter",
+    seatLimit: 3,
+    repoLimit: 1,
+    featureLimit: 5,
+    // 5 features at the $1-5/scan the pricing page quotes is ~$25. $50 leaves
+    // room for re-scans and still caps a runaway at the price of a lunch.
+    monthlySpendCents: 5e3,
+    features: new Set(STARTER_FEATURES)
+  },
+  team: {
+    id: "team",
+    name: "Team",
+    seatLimit: 999,
+    // effectively unlimited, but Stripe bills per seat
+    repoLimit: 999,
+    featureLimit: 999,
+    monthlySpendCents: 2e5,
+    // $2,000
+    features: new Set(TEAM_FEATURES)
+  }
+};
+
 // src/scan/graph.ts
 import { readFile as readFile3 } from "node:fs/promises";
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 
 // ../../../src/infrastructure/parsing/build-import-graph.ts
 import { posix } from "node:path";
@@ -9343,7 +9862,7 @@ function extractTsSymbols(source, path, moduleKey, isEntryPoint) {
 
 // ../../../src/infrastructure/parsing/tsconfig-paths.ts
 import { readFile as readFile2 } from "node:fs/promises";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 var CANDIDATES = ["tsconfig.base.json", "tsconfig.json"];
 function stripJsonComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
@@ -9353,7 +9872,7 @@ async function loadPathAliases(localPath) {
   for (const name of CANDIDATES) {
     let raw;
     try {
-      raw = await readFile2(join10(localPath, name), "utf8");
+      raw = await readFile2(join11(localPath, name), "utf8");
     } catch {
       continue;
     }
@@ -9392,7 +9911,7 @@ async function contentHashFor(graph, relPath) {
   const cached = graph.sources.get(relPath);
   if (cached !== void 0) return hashSource(cached);
   try {
-    return hashSource(await readFile3(join11(graph.repoRoot, relPath), "utf8"));
+    return hashSource(await readFile3(join12(graph.repoRoot, relPath), "utf8"));
   } catch {
     return "unreadable";
   }
@@ -9403,7 +9922,7 @@ async function buildScanGraph(repoRoot2, allFiles) {
   await Promise.all(
     tsFiles.map(async (rel) => {
       try {
-        sources.set(rel, await readFile3(join11(repoRoot2, rel), "utf8"));
+        sources.set(rel, await readFile3(join12(repoRoot2, rel), "utf8"));
       } catch {
       }
     })
@@ -9486,7 +10005,7 @@ async function walkAll(root, dir, out) {
     if (e.name.startsWith(".") && e.name !== ".") {
       if (WALK_SKIP.has(e.name)) continue;
     }
-    const full = join12(dir, e.name);
+    const full = join13(dir, e.name);
     if (e.isDirectory()) {
       if (WALK_SKIP.has(e.name)) continue;
       await walkAll(root, full, out);
@@ -9762,8 +10281,8 @@ async function whoamiDetailed(deps) {
 }
 
 // src/validate.ts
-import { readFileSync as readFileSync7 } from "node:fs";
-import { join as join13 } from "node:path";
+import { readFileSync as readFileSync8 } from "node:fs";
+import { join as join14 } from "node:path";
 function bundleStats(bundle, bytes) {
   const b = bundle ?? {};
   const domains = b.proposal?.domains ?? [];
@@ -9777,7 +10296,7 @@ function bundleStats(bundle, bytes) {
 }
 function loadSchema2(pluginRoot) {
   return JSON.parse(
-    readFileSync7(join13(pluginRoot, "schemas", "bundle.schema.json"), "utf8")
+    readFileSync8(join14(pluginRoot, "schemas", "bundle.schema.json"), "utf8")
   );
 }
 function validateBundle(bundle, schema, bytes) {
@@ -9798,7 +10317,7 @@ function validateBundle(bundle, schema, bytes) {
   return { valid: result.valid, errors, summary, stats };
 }
 function validateBundleFile(path, pluginRoot) {
-  const raw = readFileSync7(path, "utf8");
+  const raw = readFileSync8(path, "utf8");
   let bundle;
   try {
     bundle = JSON.parse(raw);
@@ -9891,7 +10410,7 @@ switch (command) {
     const globs = args.slice(1);
     if (globs.length === 0) fail("select-files needs at least one glob");
     const dir = resolve2(runDir);
-    mkdirSync3(dir, { recursive: true });
+    mkdirSync4(dir, { recursive: true });
     const r = await selectGuideFiles({ repoRoot: await repoRoot(), globs });
     const filesJson = {
       language: r.language,
@@ -9899,10 +10418,10 @@ switch (command) {
       files: r.files,
       pruned: r.pruned
     };
-    writeFileSync4(join14(dir, "files.json"), JSON.stringify(filesJson, null, 2));
+    writeFileSync5(join15(dir, "files.json"), JSON.stringify(filesJson, null, 2));
     console.log(
       JSON.stringify(
-        { wrote: join14(dir, "files.json"), language: r.language, counts: r.counts },
+        { wrote: join15(dir, "files.json"), language: r.language, counts: r.counts },
         null,
         2
       )
@@ -9912,9 +10431,9 @@ switch (command) {
   case "collect-facts": {
     const runDir = args[0] ?? fail("usage: cli.js collect-facts <runDir>");
     const dir = resolve2(runDir);
-    const filesPath = join14(dir, "files.json");
-    if (!existsSync5(filesPath)) fail("no files.json \u2014 run select-files first");
-    const filesJson = FilesJsonSchema.parse(JSON.parse(readFileSync8(filesPath, "utf8")));
+    const filesPath = join15(dir, "files.json");
+    if (!existsSync6(filesPath)) fail("no files.json \u2014 run select-files first");
+    const filesJson = FilesJsonSchema.parse(JSON.parse(readFileSync9(filesPath, "utf8")));
     const { facts } = await collectScanFacts({
       repoRoot: await repoRoot(),
       closureFiles: filesJson.files.map((f) => f.path),
@@ -9928,7 +10447,7 @@ switch (command) {
       })),
       runDir: dir
     });
-    console.log(JSON.stringify({ wrote: join14(dir, "facts.json"), factCount: facts.length }, null, 2));
+    console.log(JSON.stringify({ wrote: join15(dir, "facts.json"), factCount: facts.length }, null, 2));
     break;
   }
   case "assemble-guide": {
@@ -9965,8 +10484,8 @@ switch (command) {
   case "push-guide": {
     const path = args[0] ?? fail("usage: cli.js push-guide <guide-bundle.json> [repoSlug]");
     const bundlePath = resolve2(path);
-    if (!existsSync5(bundlePath)) fail(`no guide bundle at ${bundlePath}`);
-    const bundle = JSON.parse(readFileSync8(bundlePath, "utf8"));
+    if (!existsSync6(bundlePath)) fail(`no guide bundle at ${bundlePath}`);
+    const bundle = JSON.parse(readFileSync9(bundlePath, "utf8"));
     const slug = args[1] ?? bundle.meta?.repoSlug ?? config.repoSlug;
     if (!slug) fail("no repoSlug \u2014 pass one or set it in the bundle/config");
     const r = await pushGuide(apiConfigOrFail(), bundle, slug);
@@ -10022,15 +10541,23 @@ switch (command) {
       capturedAt: (/* @__PURE__ */ new Date()).toISOString(),
       raws
     });
-    writeFileSync4(resolve2(out), `${JSON.stringify(payload, null, 2)}
+    writeFileSync5(resolve2(out), `${JSON.stringify(payload, null, 2)}
 `);
     console.log(
       JSON.stringify({ wrote: resolve2(out), tests: payload.tests.length }, null, 2)
     );
     break;
   }
+  case "daemon": {
+    try {
+      await runDaemon(parseDaemonArgs(args));
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    }
+    break;
+  }
   default:
     fail(
-      "usage: cli.js <validate|assemble|setup-begin|setup-poll|whoami|select-files|collect-facts|assemble-guide|push-guide|push-tests|coverage-merge> \u2026"
+      "usage: cli.js <validate|assemble|setup-begin|setup-poll|whoami|select-files|collect-facts|assemble-guide|push-guide|push-tests|coverage-merge|daemon> \u2026"
     );
 }

@@ -8,11 +8,27 @@ description: >
   guide; a feature-key scans exactly that one. Use for "scan a feature",
   "generate feature guides", "document what this feature does", "scan
   everything".
-argument-hint: "[--next | feature-key] [repo-slug]"
+argument-hint: "[--next | feature-key] [repo-slug] [--non-interactive]"
 disable-model-invocation: true
 ---
 
 # Kanon Scan
+
+## Non-interactive mode (the worker daemon)
+
+`--non-interactive` means NO ONE is watching — the Kanon worker daemon is
+running this headlessly for a task queued from the Kanon UI. Three rules
+replace every `AskUserQuestion` below:
+
+1. **Never ask, never wait.** Repo slug comes from `KANON_REPO_SLUG`; the
+   feature (if any) comes from the arguments. Skip the §10 up-front
+   confirmation and every per-feature confirmation — proceed immediately.
+2. **No argument = the full sweep.** Scan every approved feature exactly as
+   the no-argument loop does, honoring the freshness pre-skip and continuing
+   past individual failures. `--next` is meaningless headless (it exists to
+   ask); treat it as the full sweep.
+3. **Report, don't prompt, on missing boundaries.** A feature with no
+   boundary globs is skipped with a note in the output — never a question.
 
 Take approved features from taxonomy to published guides. The pipeline (§1–§9)
 runs ONE feature at a time: you select the files inside the feature's boundary,

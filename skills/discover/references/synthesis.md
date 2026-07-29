@@ -4,35 +4,74 @@ A knowledge base is organized around **what a user is trying to accomplish**,
 not around how the app's screens happen to be wired. The navigation you found
 — in nav components and route definitions (code-only mode), plus what the
 pages actually showed (`--refine`) — is evidence, not the final structure. In
-refine mode, read back ALL `screens/*.json` from disk first. Then apply these
-transformations:
+refine mode, read back ALL `screens/*.json` from disk first.
+
+## The unit: what a FEATURE is
+
+A feature is **a thing the user manages** — a noun, named as they would say it
+("Invoices", "Pay runs", "Time off") — or a surface they work in ("Inbox"). It
+spans that thing's **whole lifecycle**: its list, its detail page, its
+create/edit flow, its settings tab and its API are **one feature, not five**.
+
+Split two views of one thing **only when they serve different jobs at different
+times** (a planning backlog vs an execution board). Never split because there
+are several routes. This is how the navigation of every mature B2B product is
+built — HubSpot ships "Invoices", not "Invoice list" + "Invoice detail" +
+"Invoice settings".
+
+## Transformations
 
 | Transformation | When | Example |
 |---|---|---|
+| **Merge a lifecycle** | List, detail, create and settings screens of one thing | `/invoices` + `/invoices/new` + `/invoices/[id]` → one "Invoices" |
 | **Split** an overloaded nav section | One nav bucket serves distinct user jobs | "Banking" (checking, cards, transactions) → Banking & Cash Management · Corporate Cards · Spend Management |
 | **Promote** buried capabilities | A major business function lives under Settings | Accounting/Bookkeeping settings → their own domain |
 | **Merge** scattered pieces | One reader-concept spans several screens | Receipts on transactions + policy settings + personal ledger → one Receipts feature |
+| **Fold in** machinery | An endpoint, worker or webhook serving a feature | `/api/chat/*` → the boundary of "Ask the knowledge base", never its own feature |
 | **Extract** cross-cutting themes | A reader's mental category the app never groups | Compliance items spread across 5 domains → note them; they inform descriptions |
-| **Preserve** the familiar top-level shape | Users know the app's own spaces | Keep Finance vs People Ops as `space` values |
 | **Name by capability** | Route slugs are not names | `/banking/home` → "Business Checking" |
 
-Rules of consistency:
+## Hard rules — the server rejects and re-asks when one is broken
+
+- **5–12 domains.** Named as a stakeholder would say them, never after code
+  layout (`apps`, `libs`, `components`, `services`) or a directory.
+- **Every domain holds at least 3 features** (aim 4–8). One or two means it is
+  not a domain — merge it into the domain whose job it serves.
+- **`space` must be `""`** unless you are proposing 10+ domains, and then every
+  space must group at least 2 of them. A space layer over a short domain list
+  just repeats it. **Empty is the normal case.**
+- **A parent never shares a name with its child** — no space named after its
+  only domain, no feature named after its domain.
+- **A feature must be nameable without its parent.** "Members", not "Settings
+  members". If the key needs the domain's name to make sense, you split on a
+  route instead of a job.
+- **Never name a feature after machinery** (`…-api`, `…-service`, `…-handler`,
+  `…-worker`, `…-webhook`, `…-repo`) **or after a screen type** (`…-page`,
+  `…-list`, `…-detail`, `…-overview`, `…-home`).
+- **20–40 features total** for a single-purpose product.
+
+## Rules of consistency
+
 - Uniform depth: every domain has features; every feature has capabilities.
-  A feature is a **route-anchored sub-area** — keep its primary route
-  attached; capabilities are the page's user-facing bullets. A capability with
-  **no user-facing surface** (a backend service, a workflow engine, an RBAC
-  model, app chrome) is still a feature: **omit `route` entirely and leave
-  `routePrefixes: []` — NEVER invent a route to satisfy validation.** A wrong
-  anchor lets the schema rewrite the taxonomy; an absent one is just the truth.
-- `space` is the app's own top-level shape, derived in this order of strength:
-  the owning team in `.github/CODEOWNERS`, then the top-level nav group the
-  feature's routes sit under, then the shared route prefix. Prefer the product's
-  existing vocabulary over a category you invented, and keep one space per
-  domain.
+  `route` is the feature's **nav entry point** (one destination);
+  `routePrefixes` carries the whole lifecycle including the `/api/*` URLs that
+  serve it. A capability with **no user-facing surface** (a backend service, a
+  workflow engine, an RBAC model, app chrome) is still a feature: **omit `route`
+  entirely and leave `routePrefixes: []` — NEVER invent a route to satisfy
+  validation.** A wrong anchor lets the schema rewrite the taxonomy; an absent
+  one is just the truth.
+- `capabilities` are **5–12 things a person can DO with the thing across its
+  lifecycle** (create it, review it, export it, the states it moves through) —
+  not the widgets on one page. When features get coarser this is where the
+  detail goes; never fewer than 2.
 - Keys are stable kebab-case (`banking`, `corporate-cards`); in shaped mode
   reuse approved keys verbatim.
 - Retain provider/integration names you observed (they answer real questions:
   "who administers our 401k?").
+- **Cover the whole product** — marketing pages, billing, settings, admin,
+  auth. But cover them by FOLDING them into the right feature, not by minting
+  one feature per page: the four screens of a marketing site are one "Marketing
+  site" feature whose capabilities name the screens.
 
 ## proposal.json field spec
 
@@ -45,7 +84,7 @@ Exactly this shape (the assemble tool validates it):
       "key": "banking",
       "name": "Banking & Cash Management",
       "description": "The core business bank account and how money moves.",
-      "space": "Finance",
+      "space": "",
       "subdomainType": "core | supporting | generic",
       "confidence": 0.8,
       "features": [
@@ -54,14 +93,20 @@ Exactly this shape (the assemble tool validates it):
           "name": "Treasury / Cash Management",
           "description": "Yield on idle cash across Treasuries and money market.",
           "route": "/v2/banking/treasury",
-          "capabilities": ["Live rates", "Positions table", "Per-position autopilot"],
+          "capabilities": [
+            "See live rates and current yield",
+            "Review positions (cost basis, market value, YTM)",
+            "Buy into and withdraw from a position",
+            "Turn per-position autopilot on or off",
+            "Read interest and fees history"
+          ],
           "confidence": 0.7,
           "evidence": [
             { "source": "crawl", "summary": "Banking › Treasury — positions table (cost basis, market value, YTM)" },
             { "source": "nav", "summary": "sidebar: Banking group" }
           ],
           "globs": [],
-          "routePrefixes": ["/v2/banking/treasury"]
+          "routePrefixes": ["/v2/banking/treasury", "/api/treasury"]
         },
         {
           "key": "payment-rails",
@@ -85,7 +130,9 @@ Exactly this shape (the assemble tool validates it):
 The second feature is the routeless shape: **no `route` key at all**, empty
 `routePrefixes`, a real code boundary. That is a complete, valid feature.
 
-- `route` is the feature's primary user-facing route. **Omit the key (or send
+- `route` is the feature's **nav entry point** — the one destination a person
+  clicks to. The rest of the lifecycle (`/x/new`, `/x/[id]`, `/api/x`) belongs in
+  `routePrefixes`, not in a second feature. **Omit the key (or send
   `""`) when the capability has no user-facing surface** — a backend service, a
   workflow engine, an RBAC model, app chrome. Below the wire that stores as
   NULL; it is a supported state, not a gap to paper over. Never anchor such a

@@ -235,6 +235,7 @@
                             "type": "string",
                             "enum": [
                               "route",
+                              "doc",
                               "i18n",
                               "graphql",
                               "openapi",
