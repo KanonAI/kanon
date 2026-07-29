@@ -14771,6 +14771,32 @@ function listChanges(config, repoSlug, opts) {
 function updateChangeStatus(config, repoSlug, changeId, status) {
   return request(config, "POST", "/api/changes", { repoSlug, changeId, status });
 }
+function getChangePlan(config, repoSlug, changeId) {
+  const params = new URLSearchParams({ repoSlug });
+  return request(
+    config,
+    "GET",
+    `/api/changes/${encodeURIComponent(changeId)}/plan?${params}`
+  );
+}
+function putChangePlan(config, repoSlug, changeId, input) {
+  return request(
+    config,
+    "PUT",
+    `/api/changes/${encodeURIComponent(changeId)}/plan`,
+    { repoSlug, ...input }
+  );
+}
+function completePlanSlice(config, repoSlug, changeId, input) {
+  return request(
+    config,
+    "PATCH",
+    `/api/changes/${encodeURIComponent(changeId)}/plan`,
+    { repoSlug, ...input },
+    void 0,
+    { retries: 3 }
+  );
+}
 
 // src/assemble.ts
 import { createHash } from "node:crypto";
@@ -16286,8 +16312,14 @@ import { existsSync as existsSync4, readFileSync as readFileSync6, readdirSync a
 import { join as join6 } from "node:path";
 
 // ../../../src/usecases/feature-boundary.ts
+var normalizeGlob = (glob) => glob.trim().replace(/^\.\//, "").replace(/^\//, "");
+var REGEX_META = /[.*+?^${}()|[\]\\]/g;
+function segmentPattern(segment) {
+  const body = segment.split("*").map((literal) => literal.replace(REGEX_META, "\\$&")).join("[^/]*");
+  return new RegExp(`^${body}$`);
+}
 function matchesGlob(path, glob) {
-  const g = glob.trim().replace(/^\.\//, "").replace(/^\//, "");
+  const g = normalizeGlob(glob);
   if (g.length === 0) return false;
   if (g.endsWith("/**")) {
     return path.startsWith(g.slice(0, -2));
@@ -16299,12 +16331,27 @@ function matchesGlob(path, glob) {
   const lastSlash = g.lastIndexOf("/");
   if (starIdx > lastSlash) {
     const dir = lastSlash === -1 ? "" : g.slice(0, lastSlash + 1);
-    const suffix = g.slice(starIdx + 1);
     if (!path.startsWith(dir)) return false;
     const rest = path.slice(dir.length);
-    return !rest.includes("/") && rest.endsWith(suffix);
+    if (rest.length === 0 || rest.includes("/")) return false;
+    return segmentPattern(g.slice(lastSlash + 1)).test(rest);
   }
   return false;
+}
+function unsupportedGlob(glob) {
+  const g = normalizeGlob(glob);
+  if (g.length === 0) return "empty glob";
+  const body = g.endsWith("/**") ? g.slice(0, -3) : g;
+  if (!body.includes("*")) return null;
+  const lastSlash = body.lastIndexOf("/");
+  const dirPart = lastSlash === -1 ? "" : body.slice(0, lastSlash);
+  if (dirPart.includes("*")) {
+    return 'wildcards in a directory segment are unsupported \u2014 use "dir/**" to include a subtree';
+  }
+  if (g.endsWith("/**")) {
+    return 'wildcards before a trailing "/**" are unsupported \u2014 use "dir/**" or "dir/name*"';
+  }
+  return null;
 }
 
 // ../../../src/usecases/plan-aspects.ts
@@ -20143,9 +20190,13 @@ async function selectGuideFiles(params) {
   const { repoRoot, globs, maxForwardDepth } = params;
   const allFiles = params.allFiles ?? await listRepoFiles(repoRoot);
   const graph = await buildScanGraph(repoRoot, allFiles);
-  const seed = allFiles.filter(
-    (f) => !isNoiseSeed(f) && globs.some((g) => matchesGlob(f, g))
-  );
+  const candidates = allFiles.filter((f) => !isNoiseSeed(f));
+  const seed = candidates.filter((f) => globs.some((g) => matchesGlob(f, g)));
+  const globHits = globs.map((glob) => ({
+    glob,
+    seedHits: candidates.filter((f) => matchesGlob(f, glob)).length,
+    unsupported: unsupportedGlob(glob)
+  }));
   let closurePaths;
   let reached;
   let prunedSet = /* @__PURE__ */ new Set();
@@ -20198,6 +20249,7 @@ async function selectGuideFiles(params) {
     seed,
     pruned: [...prunedSet],
     reached,
+    globHits,
     autoDepthCap,
     counts: {
       allFiles: allFiles.length,
@@ -20399,6 +20451,25 @@ async function whoamiDetailed(deps) {
 // src/validate.ts
 import { readFileSync as readFileSync7 } from "node:fs";
 import { join as join13 } from "node:path";
+function boundaryGlobWarnings(bundle) {
+  const b = bundle ?? {};
+  const out = [];
+  for (const domain of b.proposal?.domains ?? []) {
+    for (const feature of domain.features ?? []) {
+      if (!Array.isArray(feature.globs)) continue;
+      for (const glob of feature.globs) {
+        if (typeof glob !== "string") continue;
+        const reason = unsupportedGlob(glob);
+        if (reason !== null) {
+          out.push(
+            `feature "${String(feature.key ?? "?")}": glob "${glob}" matches nothing \u2014 ${reason}`
+          );
+        }
+      }
+    }
+  }
+  return out;
+}
 function bundleStats(bundle, bytes) {
   const b = bundle ?? {};
   const domains = b.proposal?.domains ?? [];
@@ -20429,8 +20500,10 @@ function validateBundle(bundle, schema, bytes) {
     error: e.error
   }));
   const stats = bundleStats(bundle, bytes);
-  const summary = result.valid ? `valid bundle: ${stats.domains} domains, ${stats.features} features, ${stats.screens} screens, ${stats.transitions} transitions` : `INVALID bundle: ${result.errors.length} schema violations (first ${errors.length} shown)`;
-  return { valid: result.valid, errors, summary, stats };
+  const warnings = boundaryGlobWarnings(bundle);
+  const warnNote = warnings.length === 0 ? "" : ` \u2014 ${warnings.length} dead boundary glob(s), fix before pushing`;
+  const summary = result.valid ? `valid bundle: ${stats.domains} domains, ${stats.features} features, ${stats.screens} screens, ${stats.transitions} transitions${warnNote}` : `INVALID bundle: ${result.errors.length} schema violations (first ${errors.length} shown)${warnNote}`;
+  return { valid: result.valid, errors, warnings, summary, stats };
 }
 function validateBundleFile(path, pluginRoot2) {
   const raw = readFileSync7(path, "utf8");
@@ -20447,6 +20520,7 @@ function validateBundleFile(path, pluginRoot2) {
           error: `not valid JSON: ${e instanceof Error ? e.message : String(e)}`
         }
       ],
+      warnings: [],
       summary: "INVALID bundle: file is not valid JSON",
       stats: { screens: 0, transitions: 0, domains: 0, features: 0, bytes: raw.length }
     };
@@ -20616,6 +20690,7 @@ server.registerTool(
           bundlePath: result.bundlePath,
           valid: report.valid,
           errors: report.errors,
+          warnings: report.warnings,
           stats: { ...result.stats, bytes: report.stats.bytes }
         },
         !report.valid
@@ -20655,7 +20730,7 @@ server.registerTool(
       if (typeof slug !== "string") return text({ error: slug.missing }, true);
       const result = await pushBundle(api, report.bundle, slug);
       if (!result.ok) return text(result, true);
-      return text(result);
+      return text(report.warnings.length > 0 ? { ...result, warnings: report.warnings } : result);
     } catch (e) {
       return text({ error: msg2(e) }, true);
     }
@@ -20730,7 +20805,9 @@ server.registerTool(
     description: "Turn a feature's boundary globs into the file set to research: seed by glob over ALL repo files, expand through the REAL import graph, drop tests, and prune generic plumbing. Writes files.json (with per-file contentHash, seed/entryPoint flags) into the run dir. Non-TS/JS repos report closureUnavailable \u2014 the skill widens the seed with grep. The MODEL never picks these files; this does.",
     inputSchema: {
       runDir: external_exports.string().describe("The scan run directory to write files.json into"),
-      globs: external_exports.array(external_exports.string()).min(1).describe("The feature boundary globs (dir/** or dir/*.ext)"),
+      globs: external_exports.array(external_exports.string()).min(1).describe(
+        "The feature boundary globs. Supported: dir/** (subtree), dir (same), and a final-segment pattern like dir/*.ext, dir/name*, dir/*name*. A wildcard in a DIRECTORY segment matches nothing and is reported back as a dead glob."
+      ),
       repoRoot: external_exports.string().optional().describe("Defaults to the git root / CWD"),
       maxForwardDepth: external_exports.number().int().min(1).optional().describe(
         "Cap import hops past the seed. Rarely needed \u2014 a >300-file closure is re-walked at depth 2 automatically; set this only to override that."
@@ -20748,18 +20825,26 @@ server.registerTool(
         language: r.language,
         closureUnavailable: r.closureUnavailable,
         files: r.files,
-        pruned: r.pruned
+        pruned: r.pruned,
+        globHits: r.globHits
       };
       writeFileSync4(join14(dir, "files.json"), JSON.stringify(filesJson, null, 2));
+      const deadGlobs = r.globHits.filter((g) => g.seedHits === 0);
+      const deadGlobNote = deadGlobs.length === 0 ? null : `${deadGlobs.length} boundary glob${deadGlobs.length === 1 ? "" : "s"} matched NO files: ${deadGlobs.map((g) => `"${g.glob}"${g.unsupported ? ` (${g.unsupported})` : ""}`).join(", ")}. The scan is narrower than the boundary claims \u2014 widen the seed with grep and note the correction in the run, and flag the boundary as needing an edit.`;
       return text({
         wrote: join14(dir, "files.json"),
         language: r.language,
         closureUnavailable: r.closureUnavailable,
         counts: r.counts,
+        globHits: r.globHits,
+        deadGlobs: deadGlobs.map((g) => g.glob),
         autoDepthCap: r.autoDepthCap,
         seedSample: r.seed.slice(0, 15),
         prunedSample: r.pruned.slice(0, 15),
-        guidance: r.closureUnavailable ? "no import graph (non-TS/JS repo) \u2014 the closure is the seed alone; widen it with grep for the feature's nouns before researching" : r.autoDepthCap ? `closure was ${r.autoDepthCap.before} files \u2014 automatically re-walked at maxForwardDepth ${r.autoDepthCap.maxForwardDepth}, giving ${r.autoDepthCap.after}. No action needed; plan aspects over these files next.` : "files.json written \u2014 plan aspects over these files next"
+        guidance: [
+          deadGlobNote,
+          r.closureUnavailable ? "no import graph (non-TS/JS repo) \u2014 the closure is the seed alone; widen it with grep for the feature's nouns before researching" : r.autoDepthCap ? `closure was ${r.autoDepthCap.before} files \u2014 automatically re-walked at maxForwardDepth ${r.autoDepthCap.maxForwardDepth}, giving ${r.autoDepthCap.after}. No action needed; plan aspects over these files next.` : "files.json written \u2014 plan aspects over these files next"
+        ].filter(Boolean).join(" ")
       });
     } catch (e) {
       return text({ error: msg2(e) }, true);
@@ -21037,6 +21122,76 @@ server.registerTool(
     const slug = repoSlugOrError(config, repoSlug);
     if (typeof slug !== "string") return text({ error: slug.missing }, true);
     const result = await updateChangeStatus(api, slug, changeId, status);
+    return text(result, !result.ok);
+  }
+);
+server.registerTool(
+  "kanon_get_plan",
+  {
+    title: "Read a change's implementation plan",
+    description: "Fetch the stored plan for a change plus `nextSlice` \u2014 the slice a run should start from. Call this at the start of /kanon:work on a feature: it is the source of truth for slice progress, and it answers even when the local .kanon/plans file is missing (a fresh worktree, another machine). Returns {plan: null} when the change was never planned.",
+    inputSchema: {
+      repoSlug: external_exports.string().optional(),
+      changeId: external_exports.string().describe("The spec change ID")
+    },
+    annotations: { readOnlyHint: true }
+  },
+  async ({ repoSlug, changeId }) => {
+    const config = cfg();
+    const api = apiConfig(config);
+    if ("missing" in api) return text({ error: api.missing }, true);
+    const slug = repoSlugOrError(config, repoSlug);
+    if (typeof slug !== "string") return text({ error: slug.missing }, true);
+    const result = await getChangePlan(api, slug, changeId);
+    return text(result, !result.ok);
+  }
+);
+server.registerTool(
+  "kanon_push_plan",
+  {
+    title: "Store a change's implementation plan",
+    description: "Mirror the plan you just authored to Kanon: the markdown body plus the slice roster (numbered 1..N, no gaps). Call it right after writing .kanon/plans/<changeId>.md. Slices already reported done stay done, so re-planning mid-flight is safe.",
+    inputSchema: {
+      repoSlug: external_exports.string().optional(),
+      changeId: external_exports.string().describe("The spec change ID"),
+      body: external_exports.string().describe("The full plan markdown, verbatim"),
+      slices: external_exports.array(
+        external_exports.object({
+          n: external_exports.number().int().describe("1-based slice number, dense (1..N)"),
+          name: external_exports.string().describe("The slice's short name")
+        })
+      ).describe("Every slice in the plan, in order")
+    }
+  },
+  async ({ repoSlug, changeId, body, slices }) => {
+    const config = cfg();
+    const api = apiConfig(config);
+    if ("missing" in api) return text({ error: api.missing }, true);
+    const slug = repoSlugOrError(config, repoSlug);
+    if (typeof slug !== "string") return text({ error: slug.missing }, true);
+    const result = await putChangePlan(api, slug, changeId, { body, slices });
+    return text(result, !result.ok);
+  }
+);
+server.registerTool(
+  "kanon_complete_slice",
+  {
+    title: "Mark a plan slice done",
+    description: "Report that slice N is finished, with its PR URL. This is the checkpoint that makes the next run start in the right place \u2014 skip it and a re-run redoes work that already shipped. Call it immediately after the slice's PR opens. Idempotent. The response's `nextSlice` is the next slice to work (null when the change is complete).",
+    inputSchema: {
+      repoSlug: external_exports.string().optional(),
+      changeId: external_exports.string().describe("The spec change ID"),
+      n: external_exports.number().int().describe("The slice number that is now done"),
+      prUrl: external_exports.string().optional().describe("The PR this slice opened, if any")
+    }
+  },
+  async ({ repoSlug, changeId, n, prUrl }) => {
+    const config = cfg();
+    const api = apiConfig(config);
+    if ("missing" in api) return text({ error: api.missing }, true);
+    const slug = repoSlugOrError(config, repoSlug);
+    if (typeof slug !== "string") return text({ error: slug.missing }, true);
+    const result = await completePlanSlice(api, slug, changeId, { n, prUrl });
     return text(result, !result.ok);
   }
 );

@@ -182,6 +182,12 @@ out of the queue via `hasGuide`, so re-deriving is safe.
 Call `kanon_select_files { runDir, globs }` (the boundary globs). It walks
 the import closure and writes `files.json` — **adopt it; never hand-write it.**
 
+- **`deadGlobs` non-empty** — one of the boundary's globs matched **no files**,
+  so the scan is narrower than the boundary claims and the gap is invisible in
+  the output. Do not shrug it off: widen the seed with grep for what the glob
+  intended, re-run, record the correction in `manifest.notes`, AND report the
+  bad glob in your final summary so the boundary itself gets fixed. A glob whose
+  `unsupported` reason is set can never match — it needs an edit, not a retry.
 - **`closureUnavailable`** (non-TS repo, no import graph): widen the seed by
   grepping the feature's nouns — e.g. `grep -rlniE
   '<noun1>|<noun2>|<featureName>' <boundary-dir>` — add the hits to the globs,

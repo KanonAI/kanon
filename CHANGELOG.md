@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.22.0 — 2026-07-29
+
+**A worker run resumes where it stopped instead of starting over.** A task that
+died used to leave everything behind: the worktree was named after the task id,
+so the re-queue got a fresh clone of the branch and the uncommitted work, the
+plan file and the crawl state under `.kanon/` all stayed in a directory nothing
+would ever open again. Worktrees are now named after the task's LINEAGE, so
+every attempt at the same work — an in-task retry or a re-queue days later —
+reattaches the same directory. Reuse never moves `HEAD`: a fetch is safe, a
+checkout would discard the very work being kept.
+
+**The Claude session is resumed too, not just the files.** The session id is
+read off the stream's `init` line and recorded against the lineage, so the next
+attempt continues that conversation via `--resume` rather than re-deriving
+everything from a directory it has never seen. It stays on the machine that owns
+the transcript — an id means nothing on another box — and a resume that cannot
+start forgets the id and retries cold, which is a different attempt rather than
+the same failure twice.
+
+**Slice progress now survives the machine.** `kanon_push_plan`,
+`kanon_get_plan` and `kanon_complete_slice` mirror a feature's plan and its
+per-slice completion to Kanon. `/kanon:work` pushes the plan when it writes it,
+reports each slice as its PR opens, and treats the server's `nextSlice` — not
+the gitignored plan file — as the authority on where to start. A re-queue after
+a genuine failure, on a wiped worktree or a different daemon, now resumes at the
+first unfinished slice instead of re-planning or redoing slice 1. The last slice
+landing resolves the change.
+
+## 0.21.0 — 2026-07-29
+
+**A boundary glob that matched nothing was invisible; now it is loud.** The
+matcher ignored the literal before a `*`, so `dir/name-*` matched every file in
+the directory and `dir/*name*` matched none — a scan could be silently far
+wider or far narrower than the boundary it was given. Both are fixed, and
+`kanon_select_files` now reports per-glob hit counts and a `deadGlobs` list so a
+glob contributing nothing is named instead of shrugged off. `kanon_validate_bundle`
+warns about globs whose FORM can never match, before a push, and the scan skill
+must act on them.
+
+**The worker survives what killed it.** A provider fault or a session that goes
+silent for 15 minutes is now retried (3 attempts, resuming the same worktree)
+instead of ending the task; the cause is read off the session's stdout, where
+API errors actually appear, rather than the stderr that stayed empty. Every
+session's raw stream is kept at `.kanon/sessions/<taskId>-attemptN.jsonl`. The
+session runs in its own process group, so a SIGTERM aimed at the daemon no
+longer kills the work it just promised to finish — and a second Ctrl-C abandons
+the task honestly, letting the lease expire so it re-queues.
+
+**`worker-install` runs the daemon as a service.** Writes a LaunchAgent (macOS)
+or systemd user unit (Linux) with the current `PATH` baked in — a service
+manager's minimal PATH cannot find `claude`, `gh` or `git`. `worker-uninstall`
+removes it.
+
 ## 0.20.0 — 2026-07-29
 
 **Setup now ends at the worker, not at discovery.** `/kanon:setup`'s handoff

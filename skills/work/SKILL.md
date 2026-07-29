@@ -31,6 +31,23 @@ created and checked out that branch in a dedicated worktree — **skip
 `git checkout -b` entirely** and work on the current branch. Use
 `$KANON_TASK_BRANCH` as `{branchName}` everywhere (push, PR head).
 
+## Resuming an interrupted run
+
+A worker run can die mid-slice: a lost lease, a killed daemon, a provider
+fault. The daemon reattaches the same worktree on the next attempt, so **the
+working tree you wake up in may already hold work** — commits, uncommitted
+edits, a plan file. Never assume you are starting clean:
+
+1. `git status` and `git log --oneline origin/main..HEAD` before writing code.
+   Finish what is there rather than redoing it.
+2. **`kanon_get_plan` is the authority on slice progress**, not the local plan
+   file. The file is gitignored and may be missing (a fresh worktree, another
+   machine); the server's `nextSlice` is always right. If the plan came back
+   and the local file is gone, write `body` to `.kanon/plans/{change-id}.md`
+   before you start.
+3. A slice already marked done is done, even if its code looks incomplete —
+   it shipped in a PR. Move to `nextSlice`.
+
 ## 1. Select the change
 
 Parse `$ARGUMENTS`:
@@ -163,7 +180,13 @@ Risk: {risk}
 
 ### 3d. Sync the plan to the app
 
-Call `kanon_update_change` with `status: "implementing"` and update the
+Call `kanon_push_plan` with the change id, the plan markdown verbatim as
+`body`, and the slice roster (`[{n: 1, name: "..."}, …]`, numbered 1..N with no
+gaps). **This is not optional.** The plan file is gitignored and lives in a
+worktree that gets deleted, so until the plan is pushed an interrupted run has
+nothing to resume from and will re-plan the same feature from scratch.
+
+Then call `kanon_update_change` with `status: "implementing"` and update the
 change summary to reference the plan.
 
 If `--plan-only` was passed, stop here:
@@ -176,8 +199,10 @@ Otherwise, proceed to slice 1.
 
 If `--slice N` was passed, or if continuing from step 3:
 
-1. Read `.kanon/plans/{change-id}.md`
-2. Find Slice N (default: the first slice with unchecked criteria)
+1. Call `kanon_get_plan` for the change. Its `nextSlice` is which slice to run
+   when no `--slice N` was given; the stored `body` is the plan even when
+   `.kanon/plans/{change-id}.md` is missing (write the file back if so).
+2. Find Slice N in the plan.
 3. Show the slice to the user:
    > **Executing Slice {N}:** {name}
    > **Goal:** {goal}
@@ -185,12 +210,19 @@ If `--slice N` was passed, or if continuing from step 3:
 4. Proceed to step 5 with scope limited to THIS SLICE ONLY. Do not touch
    files outside the slice's listed changes.
 
-After the PR is opened, update the plan file: check off the completed
-criteria, mark the slice as done, and tell the user:
-> **Slice {N} complete.** PR: {url}
-> Next: `/kanon:work {change-id} --slice {N+1}`
+After the PR is opened:
+1. Call `kanon_complete_slice` with the slice number and the PR URL. **Do this
+   immediately** — it is the only durable record that the slice shipped, and
+   without it the next run redoes merged work.
+2. Update the local plan file too: check off the completed criteria and mark
+   the slice done (the human-readable copy).
+3. Tell the user:
+   > **Slice {N} complete.** PR: {url}
+   > Next: `/kanon:work {change-id} --slice {N+1}`
 
-When all slices are complete, mark the change as resolved.
+`kanon_complete_slice` resolves the change automatically when the last slice
+lands — its response carries `nextSlice: null`. Don't call
+`kanon_update_change` with `resolved` for a planned feature.
 
 ## 5. Implement
 
@@ -299,8 +331,10 @@ from the transcript to report back to the Kanon UI.
 
 ## 8. Finalize
 
-- Call `kanon_update_change` with `status: "resolved"` (bug/improvement)
-  or update the plan file with slice completion (feature).
+- **Bug/improvement:** call `kanon_update_change` with `status: "resolved"`.
+- **Feature slice:** call `kanon_complete_slice` (step 4) — it records the
+  checkpoint and resolves the change on the last slice. Update the local plan
+  file as well.
 - Tell the user the PR URL and next steps.
 
 ## When it fails
@@ -311,5 +345,10 @@ from the transcript to report back to the Kanon UI.
   Leave change as "implementing."
 - **Git conflicts:** don't force-push. Tell the user to resolve manually.
 - **Missing `gh`:** commit + push, give the user the PR command.
-- **Plan file not found for --slice:** tell the user to run without --slice
-  first to create the plan.
+- **Plan file not found for --slice:** call `kanon_get_plan` — the server's copy
+  survives a deleted worktree. Write `body` back to
+  `.kanon/plans/{change-id}.md` and carry on. Only if that returns
+  `{plan: null}` is there genuinely no plan: tell the user to run without
+  `--slice` first to create one.
+- **`--slice N` on a slice already done:** don't redo it. Report that it
+  shipped (the plan carries its PR URL) and run `nextSlice` instead.
