@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // src/cli.ts
-import { existsSync as existsSync8, mkdirSync as mkdirSync5, readFileSync as readFileSync10, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync5, readFileSync as readFileSync11, writeFileSync as writeFileSync6 } from "node:fs";
 import { join as join18, resolve as resolve2 } from "node:path";
 
 // src/api.ts
@@ -2492,7 +2492,7 @@ var sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // src/daemon/install.ts
 import { execFile as execFile4 } from "node:child_process";
-import { existsSync as existsSync6, mkdirSync as mkdirSync4, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
+import { existsSync as existsSync6, mkdirSync as mkdirSync4, readFileSync as readFileSync8, rmSync as rmSync3, writeFileSync as writeFileSync4 } from "node:fs";
 import { homedir as homedir2, platform } from "node:os";
 import { dirname as dirname3, join as join9 } from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
@@ -2516,7 +2516,8 @@ function planFor(repoRoot2, repoSlug) {
       unitPath,
       logPath,
       loadCommand: `launchctl bootstrap gui/$(id -u) ${unitPath}`,
-      unloadCommand: `launchctl bootout gui/$(id -u)/${label}`
+      unloadCommand: `launchctl bootout gui/$(id -u)/${label}`,
+      startCommand: `launchctl kickstart -p gui/$(id -u)/${label}`
     };
   }
   const unitName = `kanon-worker-${labelFor(repoSlug)}.service`;
@@ -2526,7 +2527,8 @@ function planFor(repoRoot2, repoSlug) {
     unitPath: join9(homedir2(), ".config", "systemd", "user", unitName),
     logPath,
     loadCommand: `systemctl --user enable --now ${unitName}`,
-    unloadCommand: `systemctl --user disable --now ${unitName}`
+    unloadCommand: `systemctl --user disable --now ${unitName}`,
+    startCommand: `systemctl --user restart ${unitName}`
   };
 }
 function launchdPlist(plan, repoRoot2, cli) {
@@ -2574,6 +2576,131 @@ StandardError=append:${plan.logPath}
 WantedBy=default.target
 `;
 }
+var NOT_REGISTERED = {
+  state: null,
+  running: false,
+  pid: null,
+  runs: null,
+  lastExitCode: null
+};
+function parseLaunchdPrint(out) {
+  const first = (re) => out.match(re)?.[1]?.trim() ?? null;
+  const state = first(/^\s*state\s*=\s*(.+)$/m);
+  const pid = first(/^\s*pid\s*=\s*(\d+)/m);
+  const runs = first(/^\s*runs\s*=\s*(\d+)/m);
+  const exit = first(/^\s*last exit (?:code|status)\s*=\s*(\S+)/m);
+  return {
+    state,
+    running: state === "running",
+    pid: pid === null ? null : Number(pid),
+    runs: runs === null ? null : Number(runs),
+    lastExitCode: exit !== null && /^-?\d+$/.test(exit) ? Number(exit) : null
+  };
+}
+function parseSystemdShow(out) {
+  const props = /* @__PURE__ */ new Map();
+  for (const line of out.split("\n")) {
+    const at = line.indexOf("=");
+    if (at > 0) props.set(line.slice(0, at).trim(), line.slice(at + 1).trim());
+  }
+  const active = props.get("ActiveState") ?? null;
+  const mainPid = Number(props.get("MainPID") ?? "0");
+  const restarts = props.get("NRestarts");
+  const exit = props.get("ExecMainStatus");
+  return {
+    state: active === null ? null : `${active}${props.get("SubState") ? ` (${props.get("SubState")})` : ""}`,
+    running: active === "active",
+    pid: Number.isFinite(mainPid) && mainPid > 0 ? mainPid : null,
+    runs: restarts !== void 0 && /^\d+$/.test(restarts) ? Number(restarts) : null,
+    lastExitCode: exit !== void 0 && /^-?\d+$/.test(exit) ? Number(exit) : null
+  };
+}
+var guiDomain = () => `gui/${process.getuid?.() ?? 0}`;
+async function readServiceStatus(plan) {
+  try {
+    if (plan.kind === "launchd") {
+      const { stdout: stdout2 } = await execFileAsync3("launchctl", [
+        "print",
+        `${guiDomain()}/${plan.label}`
+      ]);
+      return parseLaunchdPrint(stdout2);
+    }
+    const { stdout } = await execFileAsync3("systemctl", [
+      "--user",
+      "show",
+      plan.label,
+      "--property=ActiveState,SubState,MainPID,ExecMainStatus,NRestarts"
+    ]);
+    return parseSystemdShow(stdout);
+  } catch {
+    return NOT_REGISTERED;
+  }
+}
+async function startService(plan) {
+  if (plan.kind === "launchd") {
+    await execFileAsync3("launchctl", ["kickstart", "-p", `${guiDomain()}/${plan.label}`]);
+    return;
+  }
+  await execFileAsync3("systemctl", ["--user", "restart", plan.label]);
+}
+var sleep3 = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitForRunning(plan) {
+  let status = await readServiceStatus(plan);
+  for (let attempt = 0; attempt < 7 && !status.running; attempt++) {
+    await sleep3(250);
+    status = await readServiceStatus(plan);
+  }
+  return status;
+}
+var LIVENESS_DELAY_MS = 1500;
+function commandError(e) {
+  if (typeof e !== "object" || e === null) return String(e);
+  const err2 = e;
+  const base = (err2.message ?? String(e)).split("\n")[0] ?? String(e);
+  const streams = [err2.stderr, err2.stdout].map((s) => typeof s === "string" ? s.trim() : "");
+  const detail = streams.find((s) => s.length > 0)?.split("\n")[0];
+  return detail ? `${base} \u2014 ${detail}` : base;
+}
+async function waitForTeardown(plan) {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if ((await readServiceStatus(plan)).state === null) return;
+    await sleep3(500);
+  }
+}
+async function bootstrapWithRetry(plan) {
+  let last;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await execFileAsync3("launchctl", ["bootstrap", guiDomain(), plan.unitPath]);
+      return;
+    } catch (e) {
+      last = e;
+      await sleep3(1e3);
+    }
+  }
+  throw last;
+}
+function launchdLoadAction(opts) {
+  if (!opts.registered) return "bootstrap";
+  return opts.unitChanged ? "reload" : "none";
+}
+async function loadLaunchd(plan, opts) {
+  const action = launchdLoadAction(opts);
+  if (action === "none") return;
+  if (action === "reload") {
+    await execFileAsync3("launchctl", ["bootout", `${guiDomain()}/${plan.label}`]).catch(
+      () => void 0
+      // "not loaded" is the harmless case.
+    );
+    await waitForTeardown(plan);
+  }
+  await bootstrapWithRetry(plan);
+}
+async function loadSystemd(plan, unitChanged) {
+  await execFileAsync3("systemctl", ["--user", "daemon-reload"]);
+  await execFileAsync3("systemctl", ["--user", "enable", "--now", plan.label]);
+  if (unitChanged) await execFileAsync3("systemctl", ["--user", "restart", plan.label]);
+}
 async function installWorkerService(params) {
   const { repoRoot: repoRoot2, repoSlug, load } = params;
   const plan = planFor(repoRoot2, repoSlug);
@@ -2584,31 +2711,78 @@ async function installWorkerService(params) {
   mkdirSync4(dirname3(plan.unitPath), { recursive: true });
   mkdirSync4(dirname3(plan.logPath), { recursive: true });
   const body = plan.kind === "launchd" ? launchdPlist(plan, repoRoot2, cli) : systemdUnit(plan, repoRoot2, cli);
+  const previous = existsSync6(plan.unitPath) ? readFileSync8(plan.unitPath, "utf8") : null;
+  const unitChanged = previous !== body;
   writeFileSync4(plan.unitPath, body);
-  if (!load) return { ...plan, wrote: plan.unitPath, loaded: false, loadError: null };
+  const idle = {
+    ...plan,
+    wrote: plan.unitPath,
+    unitChanged,
+    running: false,
+    pid: null,
+    kickstarted: false,
+    crashLooping: false,
+    state: null,
+    lastExitCode: null
+  };
+  if (!load) return { ...idle, loaded: false, loadError: null, startError: null };
   try {
     if (plan.kind === "launchd") {
-      await execFileAsync3("launchctl", ["bootout", `gui/${process.getuid?.() ?? 0}/${plan.label}`]).catch(
-        () => void 0
-      );
-      await execFileAsync3("launchctl", [
-        "bootstrap",
-        `gui/${process.getuid?.() ?? 0}`,
-        plan.unitPath
-      ]);
+      const registered = (await readServiceStatus(plan)).state !== null;
+      await loadLaunchd(plan, { registered, unitChanged });
     } else {
-      await execFileAsync3("systemctl", ["--user", "daemon-reload"]);
-      await execFileAsync3("systemctl", ["--user", "enable", "--now", plan.label]);
+      await loadSystemd(plan, unitChanged);
     }
-    return { ...plan, wrote: plan.unitPath, loaded: true, loadError: null };
   } catch (e) {
-    return {
-      ...plan,
-      wrote: plan.unitPath,
-      loaded: false,
-      loadError: e instanceof Error ? e.message.split("\n")[0] : String(e)
-    };
+    return { ...idle, loaded: false, loadError: commandError(e), startError: null };
   }
+  return { ...await verifyRunning(plan), unitChanged, loaded: true, loadError: null };
+}
+async function verifyRunning(plan) {
+  let status = await waitForRunning(plan);
+  let kickstarted = false;
+  let startError = null;
+  if (!status.running) {
+    kickstarted = true;
+    try {
+      await startService(plan);
+    } catch (e) {
+      startError = commandError(e);
+    }
+    status = await waitForRunning(plan);
+  }
+  let crashLooping = false;
+  if (status.running) {
+    const before = status;
+    await sleep3(LIVENESS_DELAY_MS);
+    const after = await readServiceStatus(plan);
+    crashLooping = after.pid !== null && before.pid !== null && after.pid !== before.pid;
+    status = after.running && !crashLooping ? after : { ...after, running: false };
+  }
+  return {
+    ...plan,
+    wrote: plan.unitPath,
+    running: status.running,
+    pid: status.running ? status.pid : null,
+    kickstarted,
+    crashLooping,
+    state: status.state,
+    lastExitCode: status.lastExitCode,
+    startError: status.running ? null : startError ?? diagnose(plan, status, crashLooping)
+  };
+}
+function diagnose(plan, status, crashLooping) {
+  const log2 = `see ${plan.logPath}`;
+  if (crashLooping) {
+    return `the worker starts and exits, and the service manager keeps respawning it \u2014 the usual causes are a revoked token (re-run /kanon:setup) or a failed preflight (\`gh auth status\`, \`claude --version\`); ${log2}`;
+  }
+  if (status.lastExitCode !== null && status.lastExitCode !== 0) {
+    return `the worker exited with code ${status.lastExitCode} \u2014 the usual causes are a revoked token (re-run /kanon:setup) or a failed preflight (\`gh auth status\`, \`claude --version\`); ${log2}`;
+  }
+  if (status.state === null) {
+    return `the service manager does not know ${plan.label} after loading it \u2014 start it with: ${plan.startCommand}`;
+  }
+  return `the unit is loaded but not running (state: ${status.state}${status.runs === 0 ? ", never started" : ""}) \u2014 start it with: ${plan.startCommand}`;
 }
 async function uninstallWorkerService(params) {
   const plan = planFor(params.repoRoot, params.repoSlug);
@@ -2631,7 +2805,7 @@ async function uninstallWorkerService(params) {
 }
 
 // src/scan/assemble-guide.ts
-import { existsSync as existsSync7, readFileSync as readFileSync8, readdirSync as readdirSync3, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync7, readFileSync as readFileSync9, readdirSync as readdirSync3, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join10 } from "node:path";
 
 // ../../../src/usecases/feature-boundary.ts
@@ -7528,7 +7702,7 @@ function readJson2(runDir, name) {
   const path = join10(runDir, name);
   if (!existsSync7(path)) throw new GateError(`missing ${name} in the run dir`);
   try {
-    return JSON.parse(readFileSync8(path, "utf8"));
+    return JSON.parse(readFileSync9(path, "utf8"));
   } catch (e) {
     throw new GateError(
       `${name} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`
@@ -7538,7 +7712,7 @@ function readJson2(runDir, name) {
 function readJsonlLines(runDir, name) {
   const path = join10(runDir, name);
   if (!existsSync7(path)) return [];
-  return readFileSync8(path, "utf8").split("\n").map((l) => l.trim()).filter((l) => l.length > 0).map((l, i) => {
+  return readFileSync9(path, "utf8").split("\n").map((l) => l.trim()).filter((l) => l.length > 0).map((l, i) => {
     try {
       return JSON.parse(l);
     } catch {
@@ -8441,7 +8615,7 @@ function checkFull(params) {
 }
 function loadGuideSchema(pluginRoot) {
   return JSON.parse(
-    readFileSync8(join10(pluginRoot, "schemas", "guide-bundle.schema.json"), "utf8")
+    readFileSync9(join10(pluginRoot, "schemas", "guide-bundle.schema.json"), "utf8")
   );
 }
 function checkSchema(artifact) {
@@ -10801,7 +10975,7 @@ async function whoamiDetailed(deps) {
 }
 
 // src/validate.ts
-import { readFileSync as readFileSync9 } from "node:fs";
+import { readFileSync as readFileSync10 } from "node:fs";
 import { join as join17 } from "node:path";
 function boundaryGlobWarnings(bundle) {
   const b = bundle ?? {};
@@ -10835,7 +11009,7 @@ function bundleStats(bundle, bytes) {
 }
 function loadSchema2(pluginRoot) {
   return JSON.parse(
-    readFileSync9(join17(pluginRoot, "schemas", "bundle.schema.json"), "utf8")
+    readFileSync10(join17(pluginRoot, "schemas", "bundle.schema.json"), "utf8")
   );
 }
 function validateBundle(bundle, schema, bytes) {
@@ -10858,7 +11032,7 @@ function validateBundle(bundle, schema, bytes) {
   return { valid: result.valid, errors, warnings, summary, stats };
 }
 function validateBundleFile(path, pluginRoot) {
-  const raw = readFileSync9(path, "utf8");
+  const raw = readFileSync10(path, "utf8");
   let bundle;
   try {
     bundle = JSON.parse(raw);
@@ -10975,7 +11149,7 @@ switch (command) {
     const dir = resolve2(runDir);
     const filesPath = join18(dir, "files.json");
     if (!existsSync8(filesPath)) fail("no files.json \u2014 run select-files first");
-    const filesJson = FilesJsonSchema.parse(JSON.parse(readFileSync10(filesPath, "utf8")));
+    const filesJson = FilesJsonSchema.parse(JSON.parse(readFileSync11(filesPath, "utf8")));
     const { facts } = await collectScanFacts({
       repoRoot: await repoRoot(),
       closureFiles: filesJson.files.map((f) => f.path),
@@ -11027,7 +11201,7 @@ switch (command) {
     const path = args[0] ?? fail("usage: cli.js push-guide <guide-bundle.json> [repoSlug]");
     const bundlePath = resolve2(path);
     if (!existsSync8(bundlePath)) fail(`no guide bundle at ${bundlePath}`);
-    const bundle = JSON.parse(readFileSync10(bundlePath, "utf8"));
+    const bundle = JSON.parse(readFileSync11(bundlePath, "utf8"));
     const slug = args[1] ?? bundle.meta?.repoSlug ?? config.repoSlug;
     if (!slug) fail("no repoSlug \u2014 pass one or set it in the bundle/config");
     const r = await pushGuide(apiConfigOrFail(), bundle, slug);
@@ -11110,10 +11284,17 @@ switch (command) {
       });
       console.log(JSON.stringify(result, null, 2));
       if (!result.loaded && result.loadError) {
-        console.error(`not started: ${result.loadError}
-start it with: ${result.loadCommand}`);
+        console.error(`not loaded: ${result.loadError}
+load it with: ${result.loadCommand}`);
         process.exit(1);
       }
+      if (args.includes("--no-load")) break;
+      if (!result.running) {
+        console.error(`the worker is NOT running: ${result.startError ?? "unknown reason"}`);
+        process.exit(1);
+      }
+      const how = result.kickstarted ? " \u2014 the unit loaded idle and was started explicitly" : result.unitChanged ? "" : " \u2014 the unit was already current, so it was left running";
+      console.error(`worker running (pid ${result.pid})${how}`);
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     }

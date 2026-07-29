@@ -38,8 +38,25 @@ Writes a LaunchAgent (macOS) or systemd user unit (Linux) and starts it, so the
 worker survives this session, a logout, and a crash. It bakes the current
 `PATH` into the unit — a service manager's minimal PATH cannot find `claude`,
 `gh` or `git`, which would otherwise fail preflight at boot. Logs land in
-`~/.kanon/logs/`. Remove it with `worker-uninstall`. Report the printed
-`unitPath` and `logPath`.
+`~/.kanon/logs/`. Remove it with `worker-uninstall`.
+
+**`running` is the field that means it worked — not `loaded`.** `loaded` says
+only that the unit was registered; the command then asks the service manager
+whether the process is up, starts it explicitly if the load left it idle, and
+re-checks after a beat to catch a daemon that starts and dies. Report
+`running`, `pid`, `unitPath` and `logPath`; mention `kickstarted: true` in
+passing (the load left the unit idle and it was started for them).
+
+If it exits nonzero, `running` is `false` and `startError` names the cause —
+relay it and act on it rather than declaring a worker the user does not have:
+
+- **`crashLooping: true`, or a nonzero `lastExitCode`** — the daemon dies on
+  startup and gets respawned. Check `logPath`: a `claim failed (401)` line means
+  the token was revoked (`/kanon:setup`), and a `preflight failed` line names the
+  missing binary (`gh auth status`, `claude --version`).
+- **loaded but never started** (`state: not running`) — the explicit start was
+  attempted and still did not take. Run the printed `startCommand` yourself and
+  re-check; do not re-run `worker-install` in a loop.
 
 ### B. This session (a trial run, or a laptop)
 

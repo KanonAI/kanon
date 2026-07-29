@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.23.1 — 2026-07-29
+
+**`worker-install` no longer reports a worker you don't have.** Loading a unit
+is not starting one: `launchctl bootstrap` exits 0 having merely REGISTERED the
+job — observed leaving `runs = 0` despite `RunAtLoad`, notably from a sandboxed
+shell — and the old command called that success. Install now asks the service
+manager whether the process is actually up, starts it explicitly if the load
+left it idle (`launchctl kickstart` / `systemctl --user restart`), and re-checks
+after a beat, because a daemon holding a revoked token exits 1 on its first poll
+and `KeepAlive` respawns it forever — "running" in one sample, a different pid
+in the next. The result carries `running`, `pid`, `kickstarted`, `crashLooping`
+and a `startError` that names the likely cause (revoked token · failed
+preflight · never started) with the log path; the command exits nonzero unless
+the worker is up and stayed up. `loaded` keeps its old meaning — the load
+command's exit code — and is no longer the field that decides.
+
+**Installing no longer kills the worker it is installing.** The old command
+booted the job out unconditionally, so every re-run SIGTERMed a healthy daemon —
+which drains the task it is executing before exiting — to re-register a
+definition that was usually byte-identical. The unit is now compared against
+what is on disk: unchanged and already registered means the definition is left
+alone (an idle one is still started), and only a genuine change reloads. That
+race was also swallowing its own cause, since `bootout` returns before the job
+is gone and the bootstrap that followed failed with nothing but "Command failed"
+— reloads now wait for the teardown, retry the transient failure, and report
+launchctl's actual words.
+
 ## 0.23.0 — 2026-07-29
 
 **The scan spends by relevance, not by size.** The taxonomy now carries a
