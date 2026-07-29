@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.20.0 — 2026-07-29
+
+**Setup now ends at the worker, not at discovery.** `/kanon:setup`'s handoff
+step asks to start `/kanon:worker` instead of offering a one-off
+`/kanon:discover`, and says why: with a worker running, nobody else on the team
+needs a terminal — discovery, guide scans and product changes are queued from
+the Kanon app and executed on this machine. Discovering inline is still one of
+the offered answers, and every slash command still works interactively; this
+changes which path the skill *leads with*.
+
+The progress line's last state is `Worker`, and the summary card's next
+command is `/kanon:worker`.
+
 ## 0.19.0 — 2026-07-28
 
 **The worker daemon: execute Kanon-queued tasks without opening Claude Code.**

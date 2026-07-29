@@ -1,19 +1,19 @@
 ---
 name: setup
 description: >
-  One-command onboarding for Kanon: sign in, verify the workspace, and
-  configure this project so /kanon:discover can run. Use for "set up
-  kanon", "connect kanon", "sign in to kanon", "onboard this
-  project", "get started with kanon".
+  One-command onboarding for Kanon: sign in, verify the workspace,
+  configure this project, and start the worker that runs everything the
+  Kanon app queues. Use for "set up kanon", "connect kanon", "sign in to
+  kanon", "onboard this project", "get started with kanon".
 argument-hint: "[--host <url>]"
 disable-model-invocation: true
 ---
 
 # Kanon Setup
 
-Take the user from zero to a project ready to map: sign in with a browser
-approval, confirm which workspace the token belongs to, write
-`.kanon/config.json`, and hand off to discovery. The token is issued to a
+Take the user from zero to a project the whole team can drive from the Kanon
+app: sign in with a browser approval, confirm which workspace the token belongs
+to, write `.kanon/config.json`, and hand off to the worker. The token is issued to a
 local file you never see — you drive the flow, the user approves it.
 
 ## Progress rendering (standing rule)
@@ -21,7 +21,7 @@ local file you never see — you drive the flow, the user approves it.
 After EVERY state change, re-render this one line (states: ⬜ not started ·
 🔄 in progress (with a parenthetical) · ✅ done · ⚠️ done-with-caveat · ❌ failed):
 
-`✅ Prerequisites · ✅ Server · 🔄 Sign-in (waiting for approval…) · ⬜ Verify · ⬜ Project · ⬜ First discovery`
+`✅ Prerequisites · ✅ Server · 🔄 Sign-in (waiting for approval…) · ⬜ Verify · ⬜ Project · ⬜ Worker`
 
 Then, in at most three short lines: **what just happened**, **what's happening
 now**, and **what the user should do RIGHT NOW** (or "nothing — I'm working").
@@ -158,18 +158,35 @@ Call `kanon_whoami`.
 4. **Write** `.kanon/config.json` = `{ url, repoSlug, targetUrl, role? }` —
    **never a token**. If `.kanon/` isn't gitignored, offer to add it.
 
-## 6. First discovery (handoff)
+## 6. Start the worker (handoff)
 
-`AskUserQuestion`: *"Start `/kanon:discover` now?"* — say that it reads
-the codebase; no browser opens unless they ask for `--refine`.
-- **Yes** → read `${CLAUDE_PLUGIN_ROOT}/skills/discover/SKILL.md` and follow it
-  from its Preflight, carrying `targetUrl` and `repoSlug`. Carrying a
-  `targetUrl` is **not** a request to crawl — run code-only unless the user
-  explicitly asked for `--refine`.
-- Either way, render the all-✅ checklist and a summary card:
-  **server** · **workspace** · **repo slug** · **target URL** · **credential
-  location** (`~/.kanon/credentials.json`) · **next commands**
-  (`/kanon:discover`, `/kanon:status`).
+Setup is the third of three commands, and the fourth thing they do decides
+which product they have. Say it plainly: **with a worker running, nobody on
+their team needs a terminal again** — discovery, guide scans and product
+changes are all queued from the Kanon app and executed here, on this machine,
+in throwaway git worktrees. Without one, every run is a slash command someone
+has to type.
+
+`AskUserQuestion`: *"Start the Kanon worker now?"*
+
+- **Yes** (recommended) → read `${CLAUDE_PLUGIN_ROOT}/skills/worker/SKILL.md`
+  and follow it. Warn first that it **blocks this session for as long as it
+  runs** — that is the point — and that a long-lived worker belongs under
+  launchd/systemd on a machine that stays awake.
+- **Not now** → tell them where the button is: `/kanon:worker` from this repo
+  whenever they want it, and until then the app will not offer a run it cannot
+  honour.
+- **Discover first, in this session** → read
+  `${CLAUDE_PLUGIN_ROOT}/skills/discover/SKILL.md` and follow it from its
+  Preflight, carrying `targetUrl` and `repoSlug`. Carrying a `targetUrl` is
+  **not** a request to crawl — run code-only unless the user explicitly asked
+  for `--refine`. Then offer the worker again.
+
+Either way, render the all-✅ checklist and a summary card: **server** ·
+**workspace** · **repo slug** · **target URL** · **credential location**
+(`~/.kanon/credentials.json`) · **next command** (`/kanon:worker`, then drive
+it from the app; `/kanon:discover`, `/kanon:scan`, `/kanon:work` and
+`/kanon:status` all still work interactively).
 
 ## Failure playbook
 
