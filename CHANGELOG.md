@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.23.3 — 2026-07-29
+
+**The worker can reach its own API, and a blocked run stops calling itself
+done.** A daemon session ran with `--permission-mode acceptEdits` and no tool
+grant, which covers file edits under the working directory and nothing else — so
+the first UI-triggered scan was refused `kanon_get_taxonomy`, had no boundary to
+read the feature from, stopped at preflight, and exited 0. The daemon read that
+exit code as success: task completed, worktree deleted, nothing to resume, $0.57
+for zero work. The customer's own allowlist could not have saved it either, since
+it lives in the untracked `.claude/settings.local.json` and does not follow into a
+git worktree.
+
+Worker sessions now spawn with an explicit grant — the Kanon MCP server plus
+`Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `Task` and `TodoWrite`. Scoped,
+not `bypassPermissions`: `WebFetch` and every other MCP server on the machine
+stay gated, so the worker's reach is this repo and Kanon's own API. And a refused
+tool call now **fails** the task, non-retryably, naming the tools it was denied —
+the grant being incomplete is a bug to fix, not something to burn three attempts
+on, and the worktree is kept so the run can be resumed once it is.
+
+## 0.23.2 — 2026-07-29
+
+**The stage checklist reaches the app.** Discover and scan re-render a progress
+line after every state change — `✅ Preflight · 🔄 Code analysis (4/6 mappers) ·
+⬜ Boundaries · …` — but the daemon forwarded only the FIRST line of each
+assistant message, and the skills print their prose summary first. Of every
+checklist ever rendered against this instance, three reached the server. The
+mapper now emits each checklist as its own `status` activity wherever it sits in
+the message, deduplicated, and the prose line underneath still lands as the
+thought it was — so the Kanon session view can draw the run's real stages
+instead of a wall of near-identical rows.
+
 ## 0.23.1 — 2026-07-29
 
 **`worker-install` no longer reports a worker you don't have.** Loading a unit

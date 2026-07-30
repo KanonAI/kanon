@@ -1741,6 +1741,63 @@ async function gitListFiles(cwd) {
   return out.split("\0").filter((p) => p.length > 0);
 }
 
+// ../../../src/domain/worker/progress-line.ts
+var STATE_BY_GLYPH = /* @__PURE__ */ new Map([
+  ["\u2B1C", "pending"],
+  ["\u25FB", "pending"],
+  ["\u25A1", "pending"],
+  ["\u2610", "pending"],
+  ["\u{1F504}", "running"],
+  ["\u23F3", "running"],
+  ["\u2705", "done"],
+  ["\u2611", "done"],
+  ["\u2714", "done"],
+  ["\u26A0", "caveat"],
+  ["\u274C", "failed"],
+  ["\u2717", "failed"],
+  ["\u{1F6AB}", "failed"]
+]);
+var SEPARATOR = /\s*·\s*/;
+var stripWrappers = (s) => s.trim().replace(/^[`*_~\s]+/u, "").replace(/[`*_~\s]+$/u, "");
+var MIN_STAGES = 3;
+function parseStage(segment) {
+  const text = stripWrappers(segment.replace(/️/g, ""));
+  const glyph = [...text][0];
+  const state = glyph === void 0 ? void 0 : STATE_BY_GLYPH.get(glyph);
+  if (state === void 0 || glyph === void 0) return null;
+  const rest = text.slice(glyph.length).trim();
+  const note = /\(([^()]*)\)$/.exec(rest);
+  const name = (note === null ? rest : rest.slice(0, note.index)).replace(/\s+/g, " ").trim();
+  if (name.length === 0) return null;
+  const detail = note?.[1]?.trim();
+  return { name, state, note: detail !== void 0 && detail.length > 0 ? detail : null };
+}
+function parseProgressLine(label) {
+  const segments = stripWrappers(label).split(SEPARATOR);
+  if (segments.length < MIN_STAGES) return null;
+  const stages = [];
+  for (const [index2, segment] of segments.entries()) {
+    const stage = parseStage(segment);
+    if (stage !== null) {
+      stages.push(stage);
+      continue;
+    }
+    if (index2 === segments.length - 1) break;
+    return null;
+  }
+  return stages.length >= MIN_STAGES ? stages : null;
+}
+var isProgressLine = (label) => parseProgressLine(label) !== null;
+function progressLinesIn(text) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const line of text.split("\n")) {
+    const normalized = stripWrappers(line);
+    if (normalized.length === 0 || !isProgressLine(normalized)) continue;
+    seen.add(normalized);
+  }
+  return [...seen];
+}
+
 // src/daemon/stream.ts
 var SAFE_INPUT_KEYS = [
   "file_path",
@@ -1754,6 +1811,14 @@ var oneLine = (s, max = 180) => {
   const first = s.trim().split("\n")[0] ?? "";
   return first.length > max ? `${first.slice(0, max - 1)}\u2026` : first;
 };
+function firstProseLine(text, max = 180) {
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0 || isProgressLine(trimmed)) continue;
+    return oneLine(trimmed, max);
+  }
+  return "";
+}
 function toolSummary(name, input) {
   if (typeof input !== "object" || input === null) return { label: name };
   const o = input;
@@ -1786,7 +1851,10 @@ function activitiesFromLine(line) {
     const out = [];
     for (const block of content) {
       if (block.type === "text" && typeof block.text === "string") {
-        const label = oneLine(block.text);
+        for (const progress of progressLinesIn(block.text)) {
+          out.push({ kind: "status", label: oneLine(progress, 200) });
+        }
+        const label = firstProseLine(block.text);
         if (label.length > 0) out.push({ kind: "thought", label });
       } else if (block.type === "tool_use" && typeof block.name === "string") {
         out.push({ kind: "tool", ...toolSummary(block.name, block.input) });
@@ -1795,15 +1863,40 @@ function activitiesFromLine(line) {
     return out;
   }
   if (event.type === "result") {
-    const errored = event.is_error === true || event.subtype !== "success";
+    const denied = deniedToolNames(event);
+    const errored = event.is_error === true || event.subtype !== "success" || denied.length > 0;
     return [
       {
         kind: errored ? "error" : "status",
-        label: errored ? `session ended with an error${typeof event.subtype === "string" ? ` (${event.subtype})` : ""}` : "session completed"
+        // A denial outranks the generic error: it is the one failure whose fix
+        // is named in the message. Reporting "session completed" here — which
+        // is what `is_error: false` earns — is how a scan that never got past
+        // preflight came back green.
+        label: denied.length > 0 ? `${denied.length} tool call${denied.length === 1 ? "" : "s"} denied: ${describeDenied(denied)}` : errored ? `session ended with an error${typeof event.subtype === "string" ? ` (${event.subtype})` : ""}` : "session completed"
       }
     ];
   }
   return [];
+}
+function deniedToolNames(event) {
+  const denials = event.permission_denials;
+  if (!Array.isArray(denials)) return [];
+  return denials.map((d) => d?.tool_name).filter((n) => typeof n === "string" && n.length > 0);
+}
+function describeDenied(denied, max = 4) {
+  const distinct = [...new Set(denied)];
+  const shown = distinct.slice(0, max).join(", ");
+  return distinct.length > max ? `${shown} (+${distinct.length - max} more)` : shown;
+}
+function deniedToolsFromLine(line) {
+  let event;
+  try {
+    event = JSON.parse(line.trim());
+  } catch {
+    return null;
+  }
+  if (event.type !== "result") return null;
+  return deniedToolNames(event);
 }
 var SESSION_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 function sessionIdFromLine(line) {
@@ -2135,6 +2228,17 @@ function buildPrompt(task, resuming) {
       return (task.payload.feature ? `/kanon:scan ${task.payload.feature} --non-interactive` : "/kanon:scan --non-interactive") + suffix;
   }
 }
+var WORKER_ALLOWED_TOOLS = [
+  "mcp__plugin_kanon_api",
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
+  "Glob",
+  "Grep",
+  "Task",
+  "TodoWrite"
+];
 var isChangeTask = (task) => task.type === "work_change";
 function taskDescriptor(task) {
   switch (task.type) {
@@ -2241,7 +2345,10 @@ async function executeTask(api, workerId, repoRoot2, task) {
           "stream-json",
           "--verbose",
           "--permission-mode",
-          "acceptEdits"
+          "acceptEdits",
+          // Nobody is here to approve anything — see WORKER_ALLOWED_TOOLS.
+          "--allowedTools",
+          ...WORKER_ALLOWED_TOOLS
         ],
         {
           cwd: worktree,
@@ -2291,6 +2398,7 @@ async function executeTask(api, workerId, repoRoot2, task) {
         stderrTail = (stderrTail + chunk.toString()).slice(-2e3);
       });
       let lastErrorText = null;
+      let deniedTools = [];
       let started = false;
       const rl = createInterface({ input: child.stdout });
       rl.on("line", (line) => {
@@ -2305,6 +2413,8 @@ async function executeTask(api, workerId, repoRoot2, task) {
         for (const a of activitiesFromLine(line)) push(a);
         const errorText = errorTextFromLine(line);
         if (errorText !== null) lastErrorText = errorText;
+        const denied = deniedToolsFromLine(line);
+        if (denied !== null) deniedTools = denied;
         const resultText = resultTextFromLine(line);
         if (resultText !== null) transcript += `
 ${resultText}`;
@@ -2343,7 +2453,12 @@ ${line}`;
             forgetSessionId(key);
             push({ kind: "status", label: RESUME_FAILED });
           }
-          const succeeded = code === 0 && !timedOut && !cancelled && !stalled;
+          const deniedSummary = deniedTools.length === 0 ? null : `${deniedTools.length} tool call${deniedTools.length === 1 ? "" : "s"} denied \u2014 the worker's grant is incomplete: ${describeDenied(deniedTools)}`;
+          if (deniedSummary) {
+            log(`task ${task.id}: ${deniedSummary}`);
+            push({ kind: "error", label: deniedSummary });
+          }
+          const succeeded = code === 0 && !timedOut && !cancelled && !stalled && deniedTools.length === 0;
           if (succeeded) {
             await removeWorktree(repoRoot2, worktree, log);
             forgetSessionId(key);
@@ -2352,9 +2467,10 @@ ${line}`;
           }
           const summary = !succeeded ? null : task.type === "discover" ? "Discovery pushed \u2014 review the proposals" : task.type === "scan" ? task.payload.feature ? `Scanned ${task.payload.feature}` : "Scanned all approved features" : `Completed ${task.payload.changeId}`;
           const detail = lastErrorText ?? (stderrTail ? stderrTail.slice(-300) : null);
+          const terminal = resumeFailed ? RESUME_FAILED : stalled ? `session went silent for ${IDLE_OUTPUT_LIMIT_MINUTES} minutes${detail ? ` \u2014 ${detail}` : ""}` : timedOut ? `task timed out after ${timeoutMinutes} minutes` : code !== 0 ? `claude exited with code ${code}${detail ? ` \u2014 ${detail}` : ""}` : null;
           resolvePromise({
             outcome: cancelled ? "cancelled" : succeeded ? "succeeded" : "failed",
-            errorMessage: succeeded || cancelled ? null : resumeFailed ? RESUME_FAILED : stalled ? `session went silent for ${IDLE_OUTPUT_LIMIT_MINUTES} minutes${detail ? ` \u2014 ${detail}` : ""}` : timedOut ? `task timed out after ${timeoutMinutes} minutes` : `claude exited with code ${code}${detail ? ` \u2014 ${detail}` : ""}`,
+            errorMessage: succeeded || cancelled ? null : [deniedSummary, terminal].filter(Boolean).join(" \u2014 ") || `claude exited with code ${code}`,
             prUrl: pr?.prUrl ?? null,
             prNumber: pr?.prNumber ?? null,
             summary,
@@ -2364,7 +2480,10 @@ ${line}`;
             // customer's subscription. A failed resume is always worth one more
             // go: the id is forgotten by now, so the retry is a cold start in
             // the same worktree — mechanically different from what just failed.
-            retryable: !succeeded && !cancelled && !timedOut && (resumeFailed || stalled || isRetryableError(lastErrorText))
+            // A denial is never retryable, even alongside a stall: nothing about
+            // the grant changes between attempts, so all a retry buys is the
+            // same refusal three times on the customer's subscription.
+            retryable: !succeeded && !cancelled && !timedOut && deniedTools.length === 0 && (resumeFailed || stalled || isRetryableError(lastErrorText))
           });
         })();
       });
