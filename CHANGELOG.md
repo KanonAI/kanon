@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.26.0 — 2026-08-05
+
+**The session edits the taxonomy; it no longer types it.** After 0.25.0 the
+slow part of a discover run was the synthesis pass authoring ~70KB of
+proposal JSON — minutes of pure output generation, most of it transcription
+of facts the signals already held. `discover-collect` now also compiles a
+complete **draft proposal** deterministically (nav labels → feature names,
+route-prefix clusters → lifecycles, sidebar sections → domains, affinity +
+`backendExpectations` + module/dir matches → boundaries, evidence copied
+verbatim from signals) plus a `draft-report.md` naming exactly what it could
+not decide: IA-law violations in the server repair-pass's own wording, dead
+nav links, unclaimed routes, unplaced backend clusters. The session authors a
+small **edit script** (`patch.json` — merge/rename/set-capabilities/prune;
+op vocabulary in synthesis.md) and the new **`apply-patch`** command applies
+it: always from the draft (`proposal.json = f(draft, patch)`, so re-running
+never compounds), atomic, unknown targets failing with the available keys in
+the error, a 30% shrink guard, route grounding against the collected
+inventory, and one violation-driven repair pass — the plugin path's first
+real IA-law enforcement point.
+
+**Measured** (every-io, producer eval, all lanes committed as ratchets): the
+**zero-LLM draft alone** scores feature recall 74.1%, route accuracy 90.0%,
+route grounding 100%, boundary-vs-target F1 99.1% — a reviewable taxonomy in
+1.2 seconds for $0 (its own eval lane recompiles it from the pinned clone
+every run). Draft + clean-room patch: recall 77.8% (ties full synthesis),
+cohesion 73.3% (+12 over full synthesis), grounding 100%, fragmentation 1,
+zero globless features — for **2.7× less authored output** (26KB patch vs
+70KB proposal). Full-proposal authoring survives as the explicit fallback
+(`usable: false` in the draft report, mapper-fleet mode, refine mode) and
+keeps its own eval lane.
+
+## 0.25.0 — 2026-08-05
+
+**Discovery in minutes, not half an hour — collectors first, agents as the
+fallback.** A discover run cost 19–31 minutes and $10–31 of the customer's
+subscription, most of it a six-agent mapper fleet re-deriving with LLMs what
+is mechanically extractable: routes are a file layout, nav labels are grep,
+schema models are a parse. The plugin now bundles the Kanon server's ten
+signal collectors (`discover-collect`) and runs them locally — 220 signals
+from this repo in **92 milliseconds** — then the session makes ONE synthesis
+pass over the same digest the server's eval'd proposer reads. Boundaries come
+from the digest too (route directory globs + the affinity bridge's
+`backendExpectations`), so the boundary fan-out leaves the critical path with
+its confidence un-halving intact.
+
+The mapper fleet is still there, demoted to what it is uniquely good at:
+stacks the collectors can't parse. The coverage gate is explicit — `route`
+count 0, or `route + nav < 10`, falls back to the fleet and says so — and
+`--deep` forces the fleet when someone wants the exhaustive pass. Everything
+downstream (bundle shape, review gate, shaped mode) is unchanged.
+
+**Measured** (every-io, blind clean-context synthesis, producer eval): the
+first run exposed three synthesis losses and all three got fixes in this
+release — the digest was hiding 703 of 783 routes (the plugin now digests
+with wider caps: 300/section vs the server proposer's 80), capabilities were
+written in GraphQL-operation language (synthesis.md now demands the USER'S
+words — nav labels, page titles, buttons), and page-route variants beat nav
+routes (synthesis.md now says the nav route IS the route). Round 2: feature
+recall 59→78%, route accuracy 90.5% (beats the crawl fixture's 76%),
+grounding 97%, **credit-boundary F1 0.997 with zero globless features** —
+the axis a crawl bundle scores zero on. Capability coverage (18%) stays
+structurally below crawl (65%): code cannot echo UI wording it never saw.
+The bundle is committed as the code-mode eval fixture with its own floors.
+
+## 0.24.0 — 2026-08-05
+
+**The activity feed shows the fleet, not just the dispatcher.** The skills fan
+work out to background subagents — a discover run launches six mappers inside a
+minute — but only the parent session's own events reached the Kanon UI, so the
+feed went silent for exactly as long as the agents were grinding: a 12-minute
+parallel mapping phase rendered as one "Agent: Map routes and pages" row and
+then nothing. The daemon now maps the subagents' lifecycle events too: each
+progress heartbeat lands as `↳ <agent> · <what it is doing>`, and every agent
+reports `subagent completed` (or `failed`, as an error row) by name. The
+agent's full report never crosses the wire — repo content stays on the box;
+only the one-line descriptions do.
+
+Also granted the worker's sessions the `Agent` tool by name. The skills' fan-out
+ran on the `Task` grant only because the CLI still honors the pre-rename alias —
+now both names are in `WORKER_ALLOWED_TOOLS`, so parallel subagents keep working
+whichever way a future CLI resolves it.
+
 ## 0.23.3 — 2026-07-29
 
 **The worker can reach its own API, and a blocked run stops calling itself

@@ -50,6 +50,111 @@ built — HubSpot ships "Invoices", not "Invoice list" + "Invoice detail" +
   `…-list`, `…-detail`, `…-overview`, `…-home`).
 - **20–40 features total** for a single-purpose product.
 
+## Patch script (collector mode — the default)
+
+In collector mode you do not write `proposal.json`; the draft compiler
+already did. You write **`patch.json`** — an ordered edit script — and
+`cli.js apply-patch <runDir>` produces `proposal.json` from
+draft + patch. Everything above (the unit, the transformations, the hard
+rules) still governs WHAT to change; the ops are just how you say it.
+
+| op | what it does |
+|---|---|
+| `set-feature` | merge fields into a feature: `set: {key?, name?, description?, route?, capabilities?, confidence?}`. `"route": null` deletes the route (a surface-less capability). |
+| `set-boundary` | replace a feature's `globs` and/or `routePrefixes` (globs are `dir/**` prefixes ONLY). |
+| `move-feature` | move a feature to another existing domain. |
+| `merge-features` | fold `from` features into `into` — globs/routePrefixes/evidence union, capabilities union unless `set.capabilities` replaces them. |
+| `add-feature` / `remove-feature` | a full wire feature into an existing domain / drop one. |
+| `set-domain` | merge fields into a domain (`subdomainType: "core"` is yours to claim — the compiler never does). |
+| `merge-domains` | fold `from` domains' features into `into`, removing them. The usual fix for a too-long domain list. |
+| `add-domain` / `remove-domain` | a full wire domain (with features) / drop one, features included. |
+
+Rules of the script:
+
+- **Ops apply strictly in order.** After a rename, later ops use the new key.
+- **Unknown targets fail the whole patch** — the error names the op and what
+  WAS available. Nothing is written on failure; fix `patch.json`, re-run.
+- `apply-patch` always starts from the draft (`proposal.json = f(draft,
+  patch)`), so re-running never compounds edits.
+- Any `route` you set must be **byte-identical to a collected route**
+  (`signals.json` → `routes`); otherwise omit it (`"route": null`).
+- Removing more than 70% of the draft's features needs `"allowShrink": true`
+  — deliberate shrinks only.
+
+A complete patch (this example is CI-validated against the real schema):
+
+<!-- kanon:example schema=patch -->
+```json
+{
+  "patchVersion": 1,
+  "ops": [
+    {
+      "op": "merge-domains",
+      "into": "banking",
+      "from": ["cards", "treasury"],
+      "set": { "name": "Banking & Cash Management", "description": "The core business account and how money moves." }
+    },
+    {
+      "op": "set-feature",
+      "domain": "banking",
+      "feature": "treasury",
+      "set": {
+        "name": "Treasury / Cash Management",
+        "description": "Yield on idle cash across Treasuries and money market.",
+        "capabilities": [
+          "See live rates and current yield",
+          "Review positions (cost basis, market value, YTM)",
+          "Buy into and withdraw from a position",
+          "Turn per-position autopilot on or off"
+        ]
+      }
+    },
+    { "op": "set-domain", "domain": "banking", "set": { "subdomainType": "core" } },
+    { "op": "move-feature", "domain": "settings", "feature": "statements", "toDomain": "banking" },
+    {
+      "op": "add-feature",
+      "domain": "banking",
+      "feature": {
+        "key": "payment-rails",
+        "name": "Payment Rails",
+        "description": "ACH and wire execution — no screen of its own; other features drive it.",
+        "capabilities": ["ACH batch submission", "Wire cutoff windows", "Return handling"],
+        "confidence": 0.6,
+        "evidence": [
+          { "source": "module", "summary": "src/payments/rails/ — ach.ts, wire.ts, settlement.ts" }
+        ],
+        "globs": ["src/payments/rails/**"],
+        "routePrefixes": []
+      }
+    },
+    { "op": "remove-feature", "domain": "marketing", "feature": "storybook" }
+  ]
+}
+```
+
+What a GOOD patch spends its ops on, in order: the draft-report's shape
+violations (usually `merge-domains`) → names/descriptions in the product's
+own vocabulary → capabilities in the user's words → the report's gaps
+(`add-feature` for unplaced backend clusters — routeless: omit `route`
+rather than guessing an anchor) → pruning non-features (`remove-feature`
+for internal/dev/demo screens the compiler kept because a route existed) →
+`core` subdomain claims.
+What it does NOT do: re-state what the draft already has right, rename keys
+without cause (keys are identity — an approved node orphans when its key
+changes), or touch boundaries the compiler grounded in signals.
+
+**Merge discipline — the compiler already merged the mechanical cases.** Every
+lifecycle the route tree proves (`/x`, `/x/new`, `/x/[id]`) is already ONE
+draft feature, so a `merge-features` op is a claim that two things with
+*different names and different routes* are secretly one thing. That is
+sometimes true (a legacy route and its v2 twin; "Wise" and "International
+payments") — but two SIDEBAR SIBLINGS are two features ("Cards" and "My
+cards" serve the admin and the employee; "Bill pay" and "Bills" the payer and
+the approver). G1/G2 count DOMAINS — fix them with `merge-domains`, which
+moves features intact, never by collapsing the features themselves. When
+unsure, leave the split: a reviewer merges two proposals in one click, but an
+over-merged feature silently disappears from review entirely.
+
 ## Rules of consistency
 
 - Uniform depth: every domain has features; every feature has capabilities.
@@ -63,7 +168,12 @@ built — HubSpot ships "Invoices", not "Invoice list" + "Invoice detail" +
 - `capabilities` are **5–12 things a person can DO with the thing across its
   lifecycle** (create it, review it, export it, the states it moves through) —
   not the widgets on one page. When features get coarser this is where the
-  detail goes; never fewer than 2.
+  detail goes; never fewer than 2. **Write them in the USER'S language — the
+  words on nav labels, page titles, buttons and tabs — never in the code's.**
+  A GraphQL operation or endpoint name is evidence that a capability exists,
+  not its name: `V2_ExcludeEmployeesFromPayrollCycle` is the capability
+  "Skip an employee for this pay run". Say what the person does, in the words
+  the product shows them.
 - Keys are stable kebab-case (`banking`, `corporate-cards`); in shaped mode
   reuse approved keys verbatim.
 - Retain provider/integration names you observed (they answer real questions:
@@ -73,10 +183,13 @@ built — HubSpot ships "Invoices", not "Invoice list" + "Invoice detail" +
   one feature per page: the four screens of a marketing site are one "Marketing
   site" feature whose capabilities name the screens.
 
-## proposal.json field spec
+## proposal.json field spec (fallback: full authoring)
 
-Exactly this shape (the assemble tool validates it):
+Used when there is no draft to patch — mapper-fleet mode, refine mode, or a
+draft-report that says `usable: false`. Exactly this shape (the assemble tool
+validates it; this example is CI-validated against the real schema):
 
+<!-- kanon:example schema=proposal -->
 ```json
 {
   "domains": [
@@ -85,7 +198,7 @@ Exactly this shape (the assemble tool validates it):
       "name": "Banking & Cash Management",
       "description": "The core business bank account and how money moves.",
       "space": "",
-      "subdomainType": "core | supporting | generic",
+      "subdomainType": "core",
       "confidence": 0.8,
       "features": [
         {
@@ -132,7 +245,11 @@ The second feature is the routeless shape: **no `route` key at all**, empty
 
 - `route` is the feature's **nav entry point** — the one destination a person
   clicks to. The rest of the lifecycle (`/x/new`, `/x/[id]`, `/api/x`) belongs in
-  `routePrefixes`, not in a second feature. **Omit the key (or send
+  `routePrefixes`, not in a second feature. **When the same surface has both a
+  navigation route and an older/variant page route (`/v2/banking/pay-bill` in
+  the sidebar vs `/banking/pay-bill` in the pages tree), the NAV route is the
+  `route`** — it is the IA the user actually sees — and the variants go in
+  `routePrefixes`. **Omit the key (or send
   `""`) when the capability has no user-facing surface** — a backend service, a
   workflow engine, an RBAC model, app chrome. Below the wire that stores as
   NULL; it is a supported state, not a gap to paper over. Never anchor such a

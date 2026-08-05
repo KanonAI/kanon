@@ -5,7 +5,7 @@ description: >
   Claude in Chrome) to build a Kanon taxonomy proposal (domains →
   features → capabilities). Use for "discover my app", "crawl the product",
   "build the knowledge base", "map what our app does".
-argument-hint: "[target-url (only needed with --refine)] [repo-slug] [--refine (adds browser crawl)] [--auto-approve] [--non-interactive]"
+argument-hint: "[target-url (only needed with --refine)] [repo-slug] [--refine (adds browser crawl)] [--deep (force the mapper fleet)] [--auto-approve] [--non-interactive]"
 disable-model-invocation: true
 ---
 
@@ -44,11 +44,13 @@ over completeness: record only what you found, mark gaps, never invent.
 The discover command has two axes:
 
 **Source mode** (how signals are gathered):
-- **Code-only (default)**: reads the codebase directly — routes, nav
-  components, layouts, middleware/guards, schemas, i18n, modules, ownership.
-  Fast, requires no running app, covers most taxonomy signal. The server-side
-  pipeline runs 9 signal collectors, digests the signals, and makes one LLM
-  triangulation call to propose the taxonomy.
+- **Code-only (default)**: the plugin bundles the Kanon server's ten signal
+  collectors and runs them locally in seconds (`discover-collect`) — routes,
+  nav components, guards, schemas, modules, dirs, i18n, GraphQL, ownership,
+  product docs — then YOU make one synthesis pass over the digest. No
+  subagents, no re-reading what the collectors already proved. The mapper
+  fleet (§3a) exists only as a fallback for stacks the collectors can't
+  parse, or when the user passes `--deep`.
 - **Code + browser refine** (`--refine`, and only `--refine`): after the
   code-only pass, also crawls the running app in Chrome to add visual
   navigation breadcrumbs, page titles, and UI features. Use when the codebase
@@ -84,6 +86,12 @@ Reference files (read when you reach that stage):
 After EVERY state change, re-render this one line (states: ⬜ not started ·
 🔄 in progress (with a parenthetical) · ✅ done · ⚠️ done-with-caveat · ❌ failed):
 
+Collector mode (the default):
+
+`✅ Preflight · ✅ Collect · 🔄 Patch · ⬜ Apply · ⬜ Assemble · ⬜ Push`
+
+Fallback (mapper fleet) mode:
+
 `✅ Preflight · 🔄 Code analysis (4/6 mappers) · ⬜ Boundaries · ⬜ Crawl · ⬜ Synthesis · ⬜ Assemble · ⬜ Push`
 
 Drop `Crawl` from the line entirely in code-only mode — don't render a step you
@@ -98,7 +106,9 @@ happened**, **what's happening now**, and **what the user should do RIGHT NOW**
 At every phase transition, stamp `manifest.timings` —
 `"<phase>": { "startedAt", "endedAt" }`, UTC ISO from
 `date -u +%Y-%m-%dT%H:%M:%SZ` (never invent a timestamp). Phases:
-`preflight`, `mappers`, `boundaries`, `crawl` (refine only), `synthesis`,
+`preflight`, `collect`, `patch` (authoring patch.json), `apply`,
+`mappers` (fallback only), `boundaries` (fallback only), `crawl` (refine
+only), `synthesis` (fallback full-proposal authoring only),
 `assemble`. Timings are diagnostic — nothing validates them, nothing blocks
 on them — but a run with no timings cannot tell anyone where its wall-clock
 went, so stamp as you go, not retroactively.
@@ -155,9 +165,71 @@ rewrite it:
 
 ## 3. Code-only analysis (always runs)
 
-Read the codebase to extract taxonomy signals. The server-side pipeline
-handles the heavy lifting (9 signal collectors), but you can enrich the
-proposal by reading key files directly:
+### 3.0 Collect signals mechanically (default path — run this FIRST)
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js discover-collect <runDir>
+```
+
+Seconds, deterministic, no subagents — the same ten collectors the Kanon
+server runs, bundled into the plugin, plus a **draft compiler** that turns
+the signals into a complete draft proposal mechanically. It writes into the
+run dir:
+
+- **`signals-digest.md`** — routes (each with the directory glob its page
+  lives in), nav label→route mappings, guards, schema clusters, module/dir
+  glob candidates, README/docs product vocabulary, and cross-layer affinity
+  lines. This is the complete evidence base for synthesis.
+- **`signals.json`** — per-source counts, collectors that failed,
+  `backendExpectations` (route → the backend globs its boundary must
+  include), and `routes` (the page-route inventory `apply-patch` grounds
+  patched routes against).
+- **`draft-proposal.json`** — a full draft taxonomy compiled from the
+  signals: nav labels as feature names, route clusters as lifecycles,
+  expectation globs as boundaries, evidence copied from the signals. **You
+  EDIT this (via a patch, §5), you do not re-author it.**
+- **`draft-report.md`** — first line `usable: true|false`, then the draft's
+  IA-law violations (your patch's work list, in the same wording the server's
+  repair pass uses) and every gap the compiler could not decide: dead nav
+  links, unclaimed routes, unattached endpoints, unplaced backend clusters.
+
+**Coverage gate — the ONLY reason to fall back to the fleet.** The collectors
+parse Next.js, Rails and Express routing plus framework-agnostic signals
+(docs, dirs, schema, ownership). Read the stats:
+
+- `route` is 0, or `route + nav < 10` → the collectors do not understand
+  this stack. Fall back to the mapper fleet (§3a → §3b) and say so.
+- `usable: false` in `draft-report.md` (thin nav, mostly orphan clusters) →
+  the DRAFT is not worth patching, but the signals are still good: author
+  `proposal.json` in full from the digest (§5's fallback), no fleet needed.
+- Otherwise: **proceed on the draft + digest alone.** Do NOT spawn mappers,
+  do NOT re-read files the digest already proves — Read `draft-report.md`,
+  `signals-digest.md` and `signals.json`, then go to §5 and author the
+  PATCH. The "unit is a job, not a page" rules and the server's deterministic
+  IA checks apply unchanged — the draft-report already lists exactly where
+  the draft breaks them. The user can force the fleet in addition with
+  `--deep`.
+
+Stay honest about gaps either way: a source with 0 signals that plausibly
+exists in this repo (obvious i18n usage but `i18n: 0`, a monorepo with
+`module: 1`) is a named gap for `report.md`, not a reason to re-crawl
+everything.
+
+**Boundaries in collector mode — already in the draft, no fan-out.** The
+compiler fills each feature's globs from the page-dir globs, the affinity
+bridge and `backendExpectations` (this is what un-halves confidence). Your
+patch only touches boundaries where the draft-report flags a gap: a feature
+with `globs: []` gets ONE targeted grep
+(`grep -rlniE '<noun1>|<noun2>' src` → reduce hits to 1–4 directory
+prefixes → `set-boundary`) — and stays honestly empty with a note when that
+finds nothing. Never spawn boundary subagents in collector mode; §3b belongs
+to the fallback path.
+
+### Fallback: manual signal areas (mapper fleet)
+
+Only when the coverage gate failed or the user passed `--deep`. Read the
+codebase to extract the same signals by hand — partitioned across the §3a
+mappers, never serially:
 
 1. **Routes & pages**: read the app's route definitions (file-based routing
    dirs, route config files, Rails routes.rb). Note the URL structure — it
@@ -208,7 +280,7 @@ no feature named after its parent, after machinery (`…-api`, `…-service`) or
 after a screen type (`…-page`, `…-list`). See synthesis.md for the full list —
 it is cheaper to follow than to have bounced back.
 
-### 3a. Mapper fan-out (any codebase you can't read in one pass)
+### 3a. Mapper fan-out (fallback / --deep only)
 
 Don't walk the areas above serially. Spawn **one mapper subagent per area** —
 routes/pages (with layouts + page metadata) · nav components · guards &
@@ -243,7 +315,7 @@ same capability is corroboration: raise its confidence. One mapper alone is a
 single signal: don't. Carry their "could not verify" items into `report.md` as
 gaps rather than dropping them.
 
-### 3b. Boundary fan-out (after the merge)
+### 3b. Boundary fan-out (fallback path only — after the mapper merge)
 
 Boundary derivation (step 6) is one grep sweep + a reduce-to-prefixes
 judgment PER FEATURE — 15–60+ features make it the longest serial stretch in
@@ -319,23 +391,65 @@ You are a read-only observer in someone's real product tenant.
 
 ## 5. Synthesize (rules in synthesis.md — read it before this step)
 
-**Code-only mode**: apply the synthesis rules to the code signals you
-gathered in step 3 to produce `proposal.json`. Confidence is based on signal
-strength: routes + nav + guard = high confidence; routes-only = medium;
-directory-inferred = low.
+**Collector mode (the default): author a PATCH, not a proposal.** The draft
+already holds every mechanical fact; your judgment goes into a small edit
+script. Read `draft-report.md` + `signals-digest.md`, skim
+`draft-proposal.json`, then write `patch.json` (op vocabulary and a complete
+example in synthesis.md) fixing, in priority order:
 
-**Refine mode**: when the frontier is empty, set manifest
-`status: "synthesizing"`, then **read back every `screens/*.json` from
-disk** (not from memory) and merge with code signals. Apply the
-nav→capability transformations to produce `proposal.json`. Screens that
-corroborate code signals boost confidence; screens with NO code match get
-flagged as "runtime-only" with reduced confidence.
+1. the report's **shape violations** (merge thin domains, split overloaded
+   ones — `merge-domains` is usually the highest-value op);
+2. **names and descriptions** in the product's own vocabulary (docs section
+   of the digest) — the draft's derived names are placeholders;
+3. **capabilities in the user's words** (`set-feature`) where the draft's are
+   thin or mechanical;
+4. the report's **gaps**: unplaced backend clusters and unclaimed routes
+   worth a feature (`add-feature` — omit `route` for backend clusters rather
+   than guessing an anchor), unattached endpoints (`set-boundary`);
+5. **pruning**: `remove-feature` for screens that are not product features —
+   internal/dev/demo surfaces (storybook, component galleries, upload
+   testbeds), application-status shells, marketing one-offs. The compiler
+   keeps them because a route existed; you know better;
+6. `subdomainType: "core"` for the product's differentiating domains
+   (`set-domain`) — the compiler never claims core.
 
-Before proposing, in both modes: **resolve every nav-parent route** against a
-real page or route file. A sidebar entry pointing at nothing is a dead link —
-list those in `report.md` under "dead nav links" (label · route · where the link
-is defined) instead of turning them into features. That check is real output the
-user can act on, and the skill is the only thing that will ask for it.
+Then run:
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/mcp-server/dist/cli.js apply-patch <runDir>
+```
+
+It applies your ops to the draft (`proposal.json = f(draft, patch)` — always
+from the draft, so editing patch.json and re-running is always safe), writes
+`proposal.json` + `patch-report.md`, and fails loudly with the contract in
+the error when an op references something that doesn't exist. Read
+`patch-report.md`: if violations remain, edit `patch.json` and re-run —
+**at most ONE repair pass** (the server's own proposer gets exactly one; so
+do you). Remaining violations after that are honest findings, not blockers.
+
+**Fallback — full authoring (`usable: false`, or apply-patch persistently
+fails):** produce `proposal.json` in ONE pass from the digest exactly as
+before — the full field spec and rules stay in synthesis.md. Confidence is
+based on signal strength: routes + nav + guard = high confidence;
+routes-only = medium; directory-inferred = low. In mapper-fleet mode (§3a)
+this fallback is always the path — there is no draft to patch.
+
+**Refine mode** (full authoring — screens are evidence the draft never saw):
+when the frontier is empty, set manifest `status: "synthesizing"`, then
+**read back every `screens/*.json` from disk** (not from memory) and merge
+with code signals. Apply the nav→capability transformations to produce
+`proposal.json`. Screens that corroborate code signals boost confidence;
+screens with NO code match get flagged as "runtime-only" with reduced
+confidence.
+
+Before proposing: **resolve every nav-parent route** against a real page or
+route file. In collector mode the compiler already did this — copy
+`draft-report.md`'s dead-nav-links section into `report.md` verbatim. In
+fallback/refine modes do it yourself: a sidebar entry pointing at nothing is
+a dead link — list those in `report.md` under "dead nav links" (label ·
+route · where the link is defined) instead of turning them into features.
+That check is real output the user can act on, and the skill is the only
+thing that will ask for it.
 
 The inverse holds too: a capability with no user-facing route is still a
 feature. **Omit its `route`** rather than anchoring it to the nearest URL — see
@@ -408,6 +522,11 @@ human decides they're right. Never skip this without the user's explicit
 | `get_taxonomy` unreachable | Continue in fresh mode — the bundle pushes later. Say which mode you ended up in. |
 | `get_taxonomy` 404 | Slug owned by another workspace — never "not created yet", since an unclaimed slug is auto-claimed by the fetch. Pick another, move the repo in the app, or re-run `/kanon:setup` as the owning account. |
 | Any call reports `redirectedTo` | The configured host redirects, and the hop strips the auth header. Set `url` in `.kanon/config.json` to the reported value, then re-run `/kanon:setup`. |
+| `discover-collect` exits nonzero / crashes | Fall back to the mapper fleet (§3a) — the deterministic path failing is exactly what the fleet exists for. Note it in `report.md`. |
+| Coverage gate fails (`route` 0, or `route + nav < 10`) | The collectors don't parse this stack — mapper fleet (§3a → §3b), and say so up front. |
+| `draft-report.md` says `usable: false` | The draft isn't worth patching but the signals are fine — author `proposal.json` in full from the digest (§5 fallback). No fleet. |
+| `apply-patch` exits nonzero | The error names the op, what it referenced, and what was available — fix `patch.json` accordingly and re-run. It always re-applies from the draft, so re-running is safe. Persistent failure → author `proposal.json` in full. |
+| `patch-report.md` still lists violations after the repair pass | Ship anyway and surface them in `report.md` — violations are findings for the reviewer, not blockers. You get ONE repair pass, like the server's proposer. |
 | A mapper delivers nothing / goes idle | Its final message *was* the report. Re-ask ONCE with the return contract restated; if it's still empty, map that area yourself. |
 | A boundary worker (§3b) delivers nothing | Same contract as mappers: re-ask ONCE, then derive its slice of boundaries yourself. Never ship features whose boundaries were simply never attempted. |
 | Assemble reports the bundle invalid | Fix `proposal.json` or the screen records and re-assemble. **Never hand-edit `bundle.json`.** |

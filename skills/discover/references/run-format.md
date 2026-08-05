@@ -9,7 +9,13 @@ recover state and to synthesize.
 manifest.json          # the crawl state machine — update after EVERY screen
 screens/NNN-<slug>.json# one file per visited screen, written immediately
 transitions.jsonl      # append-only: one {fromUrl, action, toUrl} per line
-proposal.json          # synthesis output (you write this in step 6)
+signals-digest.md      # written by discover-collect — the evidence base
+signals.json           # written by discover-collect — stats, expectations, routes
+draft-proposal.json    # written by discover-collect — the draft you PATCH
+draft-report.md        # written by discover-collect — usable verdict + gaps
+patch.json             # your edit script (collector mode — you write this)
+patch-report.md        # written by apply-patch — remaining IA-law violations
+proposal.json          # apply-patch output (or yours, in fallback modes)
 report.md              # human-readable summary table (you write this too)
 bundle.json            # written by kanon_assemble_bundle — never by hand
 ```
@@ -39,9 +45,10 @@ bundle.json            # written by kanon_assemble_bundle — never by hand
 `capturedAt`.
 
 `timings` is the phase telemetry (SKILL "Timing telemetry"): one
-`{ startedAt, endedAt }` per phase (`preflight`, `mappers`, `boundaries`,
-`crawl`, `synthesis`, `assemble`), stamped with real `date -u` output as each
-phase turns over. Diagnostic only — nothing validates or blocks on it.
+`{ startedAt, endedAt }` per phase (`preflight`, `collect`, `patch`, `apply`,
+`mappers`, `boundaries`, `crawl`, `synthesis`, `assemble`), stamped with real
+`date -u` output as each phase turns over. Diagnostic only — nothing
+validates or blocks on it.
 
 `targetUrl` is **required only in refine mode** (it's the page you crawl). Omit
 it in code-only runs rather than prompting the user — assembly derives the
