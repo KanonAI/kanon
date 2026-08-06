@@ -14626,7 +14626,8 @@ async function requestOnce(target, method, path, body, meta, opts) {
       method,
       headers: {
         ...target.token ? { authorization: `Bearer ${target.token}` } : {},
-        ...body !== void 0 ? { "content-type": "application/json" } : {}
+        ...body !== void 0 ? { "content-type": "application/json" } : {},
+        ...opts?.headers ?? {}
       },
       ...body !== void 0 ? { body: JSON.stringify(body) } : {},
       signal: AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
@@ -14727,11 +14728,16 @@ function devicePoll(url, deviceCode) {
 function whoami(config) {
   return request(config, "GET", "/api/whoami");
 }
-async function pushGuide(config, bundle, repoSlug) {
-  const r = await request(config, "POST", "/api/guide", {
-    repoSlug,
-    bundle
-  });
+async function pushGuide(config, bundle, repoSlug, opts) {
+  const draft = opts?.mode === "draft";
+  const r = await request(
+    config,
+    "POST",
+    "/api/guide",
+    { repoSlug, bundle, ...draft ? { mode: "draft" } : {} },
+    void 0,
+    draft ? { headers: { "x-kanon-guide-mode": "draft" } } : void 0
+  );
   if (!r.ok) {
     if (r.status === 404) {
       return {
@@ -16771,6 +16777,14 @@ var ManifestSchema = external_exports.object({
   // .nullish(): the docs teach clearing this to null when no aspect is in
   // progress, and rejecting that was a pure round-trip tax.
   currentAspect: external_exports.string().nullish(),
+  /**
+   * The relevance band this run committed to at §1.5 (0 core · 1-2 capsule ·
+   * 3 never-ranked=full). check:"aspects" reads it: a capsule (band 1 or 2)
+   * legitimately has exactly ONE aspect, where full depth must chapter into
+   * 3–8. Optional — a pre-band manifest gets full-depth treatment, never a
+   * laxer gate.
+   */
+  relevanceBand: external_exports.number().int().optional(),
   notes: external_exports.array(external_exports.string()).default([])
 });
 var ReadlogLineSchema = external_exports.union([
@@ -16794,6 +16808,9 @@ var MANIFEST_EXAMPLE = {
     { key: "risk-controls", status: "pending" }
   ],
   currentAspect: "risk-controls",
+  // The band this run committed to at §1.5 — a resume must not re-derive it,
+  // and check:"aspects" allows a single aspect only when this is 2 (capsule).
+  relevanceBand: 0,
   notes: ["closureUnavailable \u2014 seeded from grep over card/limit/authorization"]
 };
 var MANIFEST_MINIMAL = {
@@ -17250,9 +17267,16 @@ function resolveAspects(runDir) {
   const keys = aspectsInput.map((a) => a.key);
   const dupKey = keys.find((k, i) => keys.indexOf(k) !== i);
   if (dupKey) throw new GateError(`duplicate aspect key "${dupKey}"`);
-  if (aspectsInput.length < 3 || aspectsInput.length > 8) {
+  let capsule = false;
+  try {
+    const manifest = ManifestSchema.parse(readJson2(runDir, "manifest.json"));
+    capsule = manifest.relevanceBand === 1 || manifest.relevanceBand === 2;
+  } catch {
+  }
+  const minAspects = capsule ? 1 : 3;
+  if (aspectsInput.length < minAspects || aspectsInput.length > 8) {
     throw new GateError(
-      `aspects.json must have 3-8 aspects (found ${aspectsInput.length})`
+      capsule ? `aspects.json must have 1-8 aspects for a capsule run (found ${aspectsInput.length})` : `aspects.json must have 3-8 aspects (found ${aspectsInput.length}) \u2014 a single-aspect plan is only valid for a capsule run (manifest.relevanceBand: 1 or 2)`
     );
   }
   const selected = filesJson.files.map((f) => f.path);

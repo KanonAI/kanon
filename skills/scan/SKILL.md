@@ -8,7 +8,7 @@ description: >
   guide; a feature-key scans exactly that one. Use for "scan a feature",
   "generate feature guides", "document what this feature does", "scan
   everything".
-argument-hint: "[--next | feature-key] [repo-slug] [--non-interactive]"
+argument-hint: "[--next | feature-key] [repo-slug] [--sweep] [--non-interactive]"
 disable-model-invocation: true
 ---
 
@@ -60,6 +60,11 @@ footer**:
 - **`<feature-key>`** — scan exactly that feature, **always at full (band-0)
   depth**: an explicit key is a request for the deep guide, so the depth
   policy's bands drive defaults in the other modes, never a refusal here.
+- **`<feature-key> --sweep`** — a SWEEP MEMBER: the worker fanned "scan
+  everything" into per-feature tasks, so this explicit key is scheduling,
+  not a human asking for depth. **Honor the feature's `relevanceBand` depth
+  policy** exactly as scan-all mode would (band 0 and 3/absent full, bands 1
+  and 2 capsule). Everything else — gates, grounding, push — is identical.
 
 An `owner/repo`-shaped argument (contains `/`) is the repo-slug, never a
 feature key.
@@ -124,20 +129,24 @@ Non-tool sessions (no `kanon_*` MCP tools) use the `dist/cli.js` twins:
 
 `kanon_get_taxonomy` returns a `relevanceBand` per node: **0 = core, 1 =
 standard, 2 = edge, 3 = never ranked** (absent against an older server). In
-`--next` and scan-all modes the band decides **how much** research a feature
-gets — never how careful it is. Every band passes the SAME grounding gates;
-a band only chooses how many units of work exist:
+`--next`, scan-all, and `--sweep` modes the band decides **how much**
+research a feature gets — never how careful it is. Every band passes the
+SAME grounding gates; a band only chooses how many units of work exist:
 
 | Band | Aspects (§4) | Lens sweep (§5) | Closure (§2) |
 |---|---|---|---|
 | **0 core** — and **3 / absent** | 3–8 chapters | all five lenses, actively, on every aspect | normal |
-| **1 standard** | ≤ 4 chapters | security + flags actively on every aspect; tracking/testing/experiments only where code you already read surfaces them | normal |
-| **2 edge** | exactly **1 chapter** (`overview`) — a **capsule guide** | security actively; the rest only where encountered | `maxForwardDepth: 0` (boundary files only) |
+| **1 standard** and **2 edge** | exactly **1 chapter** (`overview`) — a **capsule guide** | security + flags actively; tracking/testing/experiments only where code you already read surfaces them | `maxForwardDepth: 0` (boundary files only) |
 
 A capsule is a real guide — cited claims, grounded paragraphs, real key
-facts — just one chapter deep. Report a pushed capsule as `✅ pushed
-(capsule)` and note that the deep guide is one command away:
-`/kanon:scan <feature-key>` always runs full depth.
+facts — just one chapter deep. Measured against the golden dataset it scores
+at near-parity with the full pipeline on completeness (weighted .974 vs
+.975) at a fraction of the wall-clock; what it gives up is chaptered
+breadth. So depth is PULL, not push: only core features get the full
+treatment by default, and every capsule page carries the "Deepen this
+guide" button. Report a pushed capsule as `✅ pushed (capsule)` and note
+that the deep guide is one command away: `/kanon:scan <feature-key>`
+(no `--sweep`) always runs full depth.
 
 **Never ranked means FULL depth.** Band 3 (or a server that sends no band)
 gets the band-0 treatment — banding must never make an unranked repo
@@ -221,7 +230,7 @@ out of the queue via `hasGuide`, so re-deriving is safe.
 
 Call `kanon_select_files { runDir, globs }` (the boundary globs). It walks
 the import closure and writes `files.json` — **adopt it; never hand-write it.**
-**Band-2 (capsule) runs pass `maxForwardDepth: 0`** — boundary-matched files
+**Capsule runs (bands 1–2) pass `maxForwardDepth: 0`** — boundary-matched files
 only, no import walk: a capsule reads the feature's own code, not its
 dependency tree.
 
@@ -269,9 +278,9 @@ testing gap, the missing-auth finding).
 ## 4. Plan aspects
 
 Write `aspects.json`: **business-meaningful chapters at the count the depth
-policy assigns** — band 0 (and 3/absent): 3–8; band 1: at most 4 (merge the
-internals chapters, keep the user-facing ones); band 2: exactly one aspect
-`{ key: "overview", pathPatterns: ["**"] }`. Group by what the code MEANS,
+policy assigns** — band 0 (and 3/absent): 3–8; bands 1–2: exactly one aspect
+`{ key: "overview", pathPatterns: ["**"] }` (the capsule). Group by what the
+code MEANS,
 not by directory. Each: kebab `key`, `name`, `description`, optional
 `order`, and `pathPatterns` (globs, first-match-wins — put specific patterns
 early). Order user-facing flow first, internals after. Examples:
@@ -279,7 +288,7 @@ early). Order user-facing flow first, internals after. Examples:
 `admin-operations`, `customer-ui`, `vendor-integration`. (Aspects over 40
 files auto-split during resolution. If resolution splits a capsule's one
 aspect, the tool is telling you the "edge" feature isn't small — research
-the split aspects as-is, still under the band-2 lens policy, and note the
+the split aspects as-is, still under the capsule lens policy, and note the
 band/size mismatch in your final summary so the ranking gets a second look.)
 
 Then `kanon_assemble_guide { runDir, check:"aspects" }`. It materializes
@@ -445,10 +454,10 @@ warnings. Set `status:"assembled"`.
    - **has a guide** — `hasGuide: true`; skipped by default;
    - **not scannable** — `boundary` null/empty (needs `/kanon:discover`).
 
-   Order the queue by **band, then taxonomy order** — core features first,
-   then standard, then edge capsules, with never-ranked (band 3) last but at
-   FULL depth. The valuable half of the KB lands first, and each feature's
-   depth follows the depth policy.
+   Order the queue by **band, then taxonomy order** — core features first
+   (full depth), then the band 1–2 capsules, with never-ranked (band 3) last
+   but at FULL depth. The valuable half of the KB lands first, and each
+   feature's depth follows the depth policy.
 
    **Do NOT call `kanon_get_guide_status` per feature to partition.** At
    60 features that is 60 round-trips for an answer it cannot give: input-hash
@@ -456,8 +465,8 @@ warnings. Set `status:"assembled"`.
    `select_files` runs in §2. Queue on `hasGuide` and let the server's hash-skip
    be authoritative on push (§9.2) — an unchanged feature ends `skipped:true`,
    which is cheap and correct.
-2. Show the partition — including the depth split (N deep · M standard · K
-   capsules, from the bands) so the user knows what they're buying — then
+2. Show the partition — including the depth split (N deep · K capsules,
+   from the bands) so the user knows what they're buying — then
    confirm ONCE (`AskUserQuestion`): scan the M queued features, skipping X
    that already have guides and Y unscannable? Offer re-scanning the guided
    ones as an explicit choice — the user knows what changed, and the server
@@ -534,7 +543,7 @@ already-pushed features fall out via `hasGuide`.
 | `--next` / scan-all finds an empty queue | Every approved feature already has a guide — report that and stop. |
 | `get_taxonomy` payload too large | You asked for `view: "full"`. The default compact projection carries every field §1/§10 need. |
 | `relevanceBand` absent from the taxonomy | Older server — treat every feature as band 0/3 (full depth). Banding degrades to exactly the pre-band behavior, never to shallower guides. |
-| A capsule's one aspect auto-split at resolution | The "edge" feature isn't small — research the split aspects under the band-2 lens policy and flag the band/size mismatch in the summary. |
+| A capsule's one aspect auto-split at resolution | The feature isn't small — research the split aspects under the capsule lens policy and flag the band/size mismatch in the summary. |
 
 ## Resumability
 

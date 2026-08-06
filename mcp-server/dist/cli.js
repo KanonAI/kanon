@@ -53,7 +53,8 @@ async function requestOnce(target, method, path, body, meta3, opts) {
       method,
       headers: {
         ...target.token ? { authorization: `Bearer ${target.token}` } : {},
-        ...body !== void 0 ? { "content-type": "application/json" } : {}
+        ...body !== void 0 ? { "content-type": "application/json" } : {},
+        ...opts?.headers ?? {}
       },
       ...body !== void 0 ? { body: JSON.stringify(body) } : {},
       signal: AbortSignal.timeout(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS)
@@ -97,6 +98,13 @@ async function requestOnce(target, method, path, body, meta3, opts) {
   }
   return { ok: true, ...json2 };
 }
+function getTaxonomy(config3, repoSlug, view = "compact") {
+  return request(
+    config3,
+    "GET",
+    `/api/taxonomy?repoSlug=${encodeURIComponent(repoSlug)}&view=${view}`
+  );
+}
 async function deviceStart(url2) {
   const meta3 = {};
   const r = await request(
@@ -119,11 +127,16 @@ function devicePoll(url2, deviceCode) {
 function whoami(config3) {
   return request(config3, "GET", "/api/whoami");
 }
-async function pushGuide(config3, bundle, repoSlug) {
-  const r = await request(config3, "POST", "/api/guide", {
-    repoSlug,
-    bundle
-  });
+async function pushGuide(config3, bundle, repoSlug, opts) {
+  const draft = opts?.mode === "draft";
+  const r = await request(
+    config3,
+    "POST",
+    "/api/guide",
+    { repoSlug, bundle, ...draft ? { mode: "draft" } : {} },
+    void 0,
+    draft ? { headers: { "x-kanon-guide-mode": "draft" } } : void 0
+  );
   if (!r.ok) {
     if (r.status === 404) {
       return {
@@ -145,6 +158,12 @@ async function pushTests(config3, coverage, repoSlug) {
     repoSlug
   });
 }
+var DAEMON_SUPPORTED_TASK_TYPES = [
+  "work_change",
+  "discover",
+  "scan",
+  "draft_guides"
+];
 function claimTask(config3, input) {
   return request(
     config3,
@@ -1724,6 +1743,13 @@ async function gitHead(cwd) {
   const sha = out?.trim();
   return sha && /^[0-9a-f]{40}$/.test(sha) ? sha : null;
 }
+async function gitCommitTimeUtc(cwd) {
+  const out = await git(cwd, ["show", "-s", "--format=%cI", "HEAD"]);
+  const iso = out?.trim();
+  if (!iso) return null;
+  const t = new Date(iso);
+  return Number.isNaN(t.getTime()) ? null : t.toISOString();
+}
 async function gitDirty(cwd) {
   const out = await git(cwd, ["status", "--porcelain"]);
   if (out === null) return null;
@@ -2095,6 +2121,19 @@ function worktreeKey(task) {
 var worktreePath = (repoRoot2, key) => join7(repoRoot2, ".kanon", "worktrees", key);
 var FETCH_TTL_MS = 5 * 60 * 1e3;
 var lastFetchAt = /* @__PURE__ */ new Map();
+var repoOps = /* @__PURE__ */ new Map();
+function withRepoLock(repoRoot2, fn) {
+  const prev = repoOps.get(repoRoot2) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  repoOps.set(
+    repoRoot2,
+    next.then(
+      () => void 0,
+      () => void 0
+    )
+  );
+  return next;
+}
 var resolved = (p) => {
   try {
     return realpathSync(p);
@@ -2128,7 +2167,10 @@ async function describeInherited(dir, base) {
   }
   return parts.length > 0 ? parts.join(", ") : null;
 }
-async function ensureWorktree(repoRoot2, key, branch) {
+function ensureWorktree(repoRoot2, key, branch) {
+  return withRepoLock(repoRoot2, () => ensureWorktreeUnlocked(repoRoot2, key, branch));
+}
+async function ensureWorktreeUnlocked(repoRoot2, key, branch) {
   const dir = worktreePath(repoRoot2, key);
   try {
     await git2(repoRoot2, ["worktree", "prune"]);
@@ -2179,12 +2221,14 @@ async function ensureWorktree(repoRoot2, key, branch) {
   }
   return { dir, reused: false, inherited: null };
 }
-async function removeWorktree(repoRoot2, dir, log2) {
-  try {
-    await git2(repoRoot2, ["worktree", "remove", "--force", dir]);
-  } catch (e) {
-    log2(`could not remove worktree ${dir}: ${firstLine(e)}`);
-  }
+function removeWorktree(repoRoot2, dir, log2) {
+  return withRepoLock(repoRoot2, async () => {
+    try {
+      await git2(repoRoot2, ["worktree", "remove", "--force", dir]);
+    } catch (e) {
+      log2(`could not remove worktree ${dir}: ${firstLine(e)}`);
+    }
+  });
 }
 async function defaultBranch(repoRoot2) {
   try {
@@ -2208,8 +2252,12 @@ var IDLE_OUTPUT_LIMIT_MINUTES = Number(
 );
 var MAX_ATTEMPTS = 3;
 var RETRY_BACKOFF_MS = [1e4, 6e4];
+var MAX_CONCURRENT_TASKS = Math.max(
+  1,
+  Number(process.env.KANON_WORKER_CONCURRENCY ?? 2) || 1
+);
 var log = (msg2) => console.log(`[kanon-daemon ${(/* @__PURE__ */ new Date()).toISOString()}] ${msg2}`);
-var shutdown = { forced: false, killSession: null };
+var shutdown = { forced: false, killers: /* @__PURE__ */ new Map() };
 function killSessionTree(child, signal) {
   if (child?.pid == null) return;
   try {
@@ -2284,7 +2332,9 @@ function buildPrompt(task, resuming) {
     case "discover":
       return `/kanon:discover --non-interactive${suffix}`;
     case "scan":
-      return (task.payload.feature ? `/kanon:scan ${task.payload.feature} --non-interactive` : "/kanon:scan --non-interactive") + suffix;
+      return (task.payload.feature ? `/kanon:scan ${task.payload.feature} --non-interactive${task.payload.band !== void 0 ? " --sweep" : ""}` : "/kanon:scan --non-interactive") + suffix;
+    case "draft_guides":
+      throw new Error("draft_guides has no skill prompt \u2014 it runs the plugin CLI");
   }
 }
 var WORKER_ALLOWED_TOOLS = [
@@ -2308,10 +2358,12 @@ function taskDescriptor(task) {
       return "discovery (code-only)";
     case "scan":
       return task.payload.feature ? `scan ${task.payload.feature}` : "scan all approved";
+    case "draft_guides":
+      return "fact sheets (plugin CLI, no session)";
   }
 }
 var RESUME_FAILED = "the recorded session could not be resumed \u2014 starting a fresh one";
-async function executeTask(api, workerId, repoRoot2, task) {
+async function executeTask(api, workerId, repoRoot2, task, cliJsPath) {
   log(`task ${task.id}: claimed (${taskDescriptor(task)})`);
   let seq = 0;
   let buffer = [];
@@ -2386,7 +2438,7 @@ async function executeTask(api, workerId, repoRoot2, task) {
           label: branch ? `worktree ready on ${branch}` : "worktree ready (detached, read-only)"
         });
       }
-      const defaultTimeout = task.type === "scan" ? 240 : task.type === "discover" ? 60 : DEFAULT_TASK_TIMEOUT_MINUTES;
+      const defaultTimeout = task.type === "scan" ? task.payload.feature ? 45 : 240 : task.type === "discover" ? 60 : DEFAULT_TASK_TIMEOUT_MINUTES;
       const timeoutMinutes = Number(
         process.env.KANON_TASK_TIMEOUT_MINUTES ?? defaultTimeout
       );
@@ -2431,7 +2483,7 @@ async function executeTask(api, workerId, repoRoot2, task) {
         }
       );
       const session = child;
-      shutdown.killSession = () => killSessionTree(session, "SIGTERM");
+      shutdown.killers.set(task.id, () => killSessionTree(session, "SIGTERM"));
       const timeout = setTimeout(
         () => {
           timedOut = true;
@@ -2488,7 +2540,7 @@ ${line}`;
         clearInterval(flusher);
         clearInterval(watchdog);
         sessionLog?.end();
-        shutdown.killSession = null;
+        shutdown.killers.delete(task.id);
         void (async () => {
           while (buffer.length > 0 && !leaseLost) {
             const before = buffer.length;
@@ -2550,7 +2602,111 @@ ${line}`;
       });
     })();
   });
-  let outcome = await runAttempt(1);
+  const runCliAttempt = (attempt) => new Promise((resolvePromise) => {
+    void (async () => {
+      let handle;
+      try {
+        handle = await ensureWorktree(repoRoot2, worktreeKey(task), null);
+      } catch (e) {
+        resolvePromise({
+          outcome: "failed",
+          errorMessage: `could not prepare worktree: ${e instanceof Error ? e.message.split("\n")[0] : e}`,
+          prUrl: null,
+          prNumber: null,
+          summary: null,
+          retryable: false
+        });
+        return;
+      }
+      const worktree = handle.dir;
+      push({ kind: "status", label: "drafting fact sheets for all approved features" });
+      const timeoutMinutes = Number(process.env.KANON_TASK_TIMEOUT_MINUTES ?? 15);
+      let timedOut = false;
+      let stalled = false;
+      child = spawn(process.execPath, [cliJsPath, "draft-guide", "--all"], {
+        cwd: worktree,
+        // Same env handoff as the sessions: a fresh worktree has no
+        // .kanon/config.json, so url + slug come down explicitly and the
+        // token resolves from ~/.kanon/credentials.json keyed by that URL.
+        env: { ...process.env, KANON_URL: api.url, KANON_REPO_SLUG: task.repoSlug },
+        detached: true,
+        // same group-signal semantics as the sessions
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      const cli = child;
+      shutdown.killers.set(task.id, () => killSessionTree(cli, "SIGTERM"));
+      const timeout = setTimeout(
+        () => {
+          timedOut = true;
+          log(`task ${task.id}: timed out after ${timeoutMinutes}m`);
+          killSessionTree(cli, "SIGTERM");
+          setTimeout(() => killSessionTree(cli, "SIGKILL"), 1e4).unref();
+        },
+        timeoutMinutes * 60 * 1e3
+      );
+      const flusher = setInterval(() => void flush(), FLUSH_INTERVAL_MS);
+      const sessionLog = openSessionLog(repoRoot2, task.id, attempt);
+      let lastOutputAt = Date.now();
+      const idleLimitMs = IDLE_OUTPUT_LIMIT_MINUTES * 60 * 1e3;
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastOutputAt < idleLimitMs) return;
+        stalled = true;
+        log(`task ${task.id}: silent for ${IDLE_OUTPUT_LIMIT_MINUTES}m \u2014 stopping`);
+        killSessionTree(cli, "SIGTERM");
+        setTimeout(() => killSessionTree(cli, "SIGKILL"), 1e4).unref();
+      }, 6e4);
+      let stderrTail = "";
+      child.stderr?.on("data", (chunk) => {
+        lastOutputAt = Date.now();
+        stderrTail = (stderrTail + chunk.toString()).slice(-2e3);
+      });
+      const rl = createInterface({ input: child.stdout });
+      rl.on("line", (line) => {
+        lastOutputAt = Date.now();
+        sessionLog?.write(`${line}
+`);
+        const label = line.trim().slice(0, 200);
+        if (label) push({ kind: "status", label });
+        if (buffer.length >= FLUSH_BATCH_SIZE) void flush();
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeout);
+        clearInterval(flusher);
+        clearInterval(watchdog);
+        sessionLog?.end();
+        shutdown.killers.delete(task.id);
+        void (async () => {
+          while (buffer.length > 0 && !leaseLost) {
+            const before = buffer.length;
+            await flush();
+            if (buffer.length >= before) break;
+          }
+          const succeeded = code === 0 && !timedOut && !cancelled && !stalled;
+          if (succeeded) {
+            await removeWorktree(
+              repoRoot2,
+              worktree,
+              (m) => log(`task ${task.id}: ${m}`)
+            );
+          } else {
+            log(`task ${task.id}: keeping worktree to resume from: ${worktree}`);
+          }
+          resolvePromise({
+            outcome: cancelled ? "cancelled" : succeeded ? "succeeded" : "failed",
+            errorMessage: succeeded || cancelled ? null : timedOut ? `guide drafting timed out after ${timeoutMinutes} minutes` : stalled ? `no output for ${IDLE_OUTPUT_LIMIT_MINUTES} minutes` : `draft-guide exited with code ${code}${stderrTail ? ` \u2014 ${stderrTail.slice(-300)}` : ""}`,
+            prUrl: null,
+            prNumber: null,
+            summary: succeeded ? "Fact sheets pushed for all approved features" : null,
+            // Deterministic CLI: a retry buys the same failure on the
+            // customer's machine. Humans re-queue after fixing the cause.
+            retryable: false
+          });
+        })();
+      });
+    })();
+  });
+  const run = task.type === "draft_guides" ? runCliAttempt : runAttempt;
+  let outcome = await run(1);
   for (let attempt = 2; attempt <= MAX_ATTEMPTS; attempt++) {
     if (outcome.outcome !== "failed" || !outcome.retryable) break;
     if (cancelled || leaseLost || shutdown.forced) break;
@@ -2563,7 +2719,7 @@ ${line}`;
       label: `transient failure \u2014 resuming (attempt ${attempt}/${MAX_ATTEMPTS})`
     });
     await sleep2(wait);
-    outcome = await runAttempt(attempt);
+    outcome = await run(attempt);
   }
   if (leaseLost) return;
   if (shutdown.forced && outcome.outcome !== "succeeded") {
@@ -2620,18 +2776,23 @@ async function runDaemon(options) {
     version2 = pluginVersion(config3.pluginRoot);
   } catch {
   }
-  log(`worker ${workerId} serving ${repoSlug} from ${repoRoot2} (server: ${api.url})`);
-  let running = null;
+  log(
+    `worker ${workerId} serving ${repoSlug} from ${repoRoot2} (server: ${api.url}, concurrency ${MAX_CONCURRENT_TASKS})`
+  );
+  const cliJsPath = join8(config3.pluginRoot, "mcp-server", "dist", "cli.js");
+  const inFlight = /* @__PURE__ */ new Map();
   let stopping = false;
   const stop = (signal) => {
-    if (stopping && running) {
+    if (stopping && inFlight.size > 0) {
       shutdown.forced = true;
-      log(`received ${signal} again \u2014 abandoning the running task (it re-queues)`);
-      shutdown.killSession?.();
+      log(
+        `received ${signal} again \u2014 abandoning ${inFlight.size} running task(s) (they re-queue)`
+      );
+      for (const kill of shutdown.killers.values()) kill();
       return;
     }
     log(
-      `received ${signal} \u2014 shutting down${running ? " after the current task (signal again to abandon it)" : ""}`
+      `received ${signal} \u2014 shutting down${inFlight.size > 0 ? ` after ${inFlight.size} running task(s) (signal again to abandon them)` : ""}`
     );
     stopping = true;
   };
@@ -2639,15 +2800,20 @@ async function runDaemon(options) {
   process.on("SIGTERM", () => stop("SIGTERM"));
   for (; ; ) {
     if (stopping) {
-      if (running) await running;
+      await Promise.allSettled([...inFlight.values()]);
       log("stopped");
       process.exit(0);
+    }
+    if (inFlight.size >= MAX_CONCURRENT_TASKS) {
+      await Promise.race([...inFlight.values()]);
+      continue;
     }
     const claim = await claimTask(api, {
       workerId,
       hostname: hostname(),
       ...version2 ? { version: version2 } : {},
-      repoSlugs: [repoSlug]
+      repoSlugs: [repoSlug],
+      supportedTypes: [...DAEMON_SUPPORTED_TASK_TYPES]
     });
     if (!claim.ok) {
       log(`claim failed (${claim.status}): ${claim.error}${claim.guidance ? ` \u2014 ${claim.guidance}` : ""}`);
@@ -2659,9 +2825,15 @@ async function runDaemon(options) {
       log(`WARNING: not authorized for: ${claim.deniedRepoSlugs.join(", ")}`);
     }
     if (claim.task) {
-      running = executeTask(api, workerId, repoRoot2, claim.task);
-      await running;
-      running = null;
+      const t = claim.task;
+      const p = executeTask(api, workerId, repoRoot2, t, cliJsPath).catch(
+        (e) => log(
+          `task ${t.id}: executeTask threw \u2014 ${e instanceof Error ? e.message : e}`
+        )
+      ).finally(() => {
+        inFlight.delete(t.id);
+      });
+      inFlight.set(t.id, p);
       continue;
     }
     const base = (claim.retryAfterSeconds || IDLE_POLL_FALLBACK_SECONDS) * 1e3;
@@ -17741,6 +17913,7 @@ var PLANS = {
 
 // ../../../src/usecases/ports.ts
 var BUNDLE_VERSION = 1;
+var GUIDE_BUNDLE_VERSION = 1;
 
 // ../../../src/usecases/prune-guide-files.ts
 function pruneGuideFiles(params) {
@@ -18188,6 +18361,151 @@ function owningGlob(s) {
   if (slash <= 0) return null;
   const dir = s.ref.slice(0, slash);
   return /\/(page|route|index|layout)\.[cm]?[jt]sx?$/.test(s.ref) ? `${dir}/**` : null;
+}
+
+// ../../../src/usecases/draft-guide.ts
+var DRAFT_GUIDE_WRITER = "draft-compiler";
+var KIND_LABELS = [
+  ["entity", "data-model table", "data-model tables"],
+  ["enum_values", "enumerated value set", "enumerated value sets"],
+  ["route", "route", "routes"],
+  ["routine", "scheduled job", "scheduled jobs"],
+  ["parameter", "constant", "constants"],
+  ["flag", "feature flag", "feature flags"],
+  ["event", "analytics event", "analytics events"],
+  ["experiment", "experiment", "experiments"],
+  ["security", "security finding", "security findings"]
+];
+var CATEGORY_RANK = {
+  fee: 0,
+  limit: 1,
+  threshold: 2,
+  timing: 3,
+  toggle: 4
+};
+var MAX_KEY_FACTS = 6;
+var paragraph = (text) => ({
+  text,
+  ruleRefs: [],
+  anchors: []
+});
+function humanizeConstantName(name) {
+  const spaced = name.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim().toLowerCase();
+  return spaced.length === 0 ? name : spaced[0].toUpperCase() + spaced.slice(1);
+}
+function factSummarySentence(facts) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const f of facts) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
+  const parts = [];
+  for (const [kind, one, many] of KIND_LABELS) {
+    const n = counts.get(kind) ?? 0;
+    if (n > 0) parts.push(`${n} ${n === 1 ? one : many}`);
+  }
+  if (parts.length === 0) {
+    return "No mechanical facts were found in the boundary files \u2014 the reference tables are empty until a deep scan reads the code.";
+  }
+  return `Collected mechanically from the boundary: ${parts.join(", ")}. Every row in the reference tables below cites the file and line it was read from.`;
+}
+function compileKeyFacts(facts) {
+  const candidates = [];
+  facts.forEach((f, index2) => {
+    if (f.kind !== "parameter") return;
+    if (f.sourceLine === void 0) return;
+    const value = f.payload.value.trim();
+    if (value.length === 0) return;
+    const rank2 = CATEGORY_RANK[f.payload.category ?? ""] ?? 5;
+    candidates.push({
+      rank: rank2,
+      index: index2,
+      fact: {
+        label: humanizeConstantName(f.payload.name),
+        value,
+        ...f.payload.unit !== void 0 ? { unit: f.payload.unit } : {},
+        ruleRefs: [],
+        anchors: [`${f.sourcePath}:${f.sourceLine}`]
+      }
+    });
+  });
+  candidates.sort((a, b) => a.rank - b.rank || a.index - b.index);
+  return candidates.slice(0, MAX_KEY_FACTS).map((c) => c.fact);
+}
+function compileDraftGuideBundle(input) {
+  const { feature, files, facts } = input;
+  const filesNoun = files.length === 1 ? "file" : "files";
+  const identity = feature.description !== void 0 && feature.description.trim().length > 0 ? feature.description.trim() : `${feature.name} is part of the ${feature.domainName} domain.`;
+  const provenance = `Preliminary fact sheet compiled mechanically from ${files.length} ${filesNoun} in the feature's approved boundary. Nothing here was written by a model \u2014 a deep scan replaces this page with a researched guide.`;
+  const divePara = [paragraph(factSummarySentence(facts))];
+  if (feature.capabilities.length > 0) {
+    divePara.push(
+      paragraph(
+        `Capabilities recorded in the approved taxonomy:
+
+${feature.capabilities.map((c) => `- ${c}`).join("\n")}`
+      )
+    );
+  }
+  const keyFacts = compileKeyFacts(facts);
+  return {
+    bundleVersion: GUIDE_BUNDLE_VERSION,
+    meta: {
+      repoSlug: feature.repoSlug,
+      domainKey: feature.domainKey,
+      featureKey: feature.featureKey,
+      commitSha: input.commitSha,
+      dirty: input.dirty,
+      capturedAt: input.capturedAt,
+      agent: {
+        harness: "claude-code",
+        model: DRAFT_GUIDE_WRITER,
+        pluginVersion: input.pluginVersion
+      }
+    },
+    files,
+    readLog: [],
+    synthesis: {
+      name: feature.name,
+      domainName: feature.domainName,
+      overview: identity,
+      rules: [],
+      edgeCases: [],
+      lifecycle: null,
+      entities: [],
+      integrations: [],
+      routines: [],
+      parameters: [],
+      decisions: [],
+      openQuestions: [],
+      knownIssues: []
+    },
+    citedRules: [],
+    aspects: [
+      {
+        key: "overview",
+        name: "Overview",
+        description: "Fact sheet compiled from the feature's boundary",
+        order: 0,
+        filePaths: files.map((f) => f.path)
+      }
+    ],
+    dives: [
+      {
+        aspectKey: "overview",
+        sections: [{ heading: "What was collected", paragraphs: divePara }],
+        flows: [],
+        edgeCases: [],
+        workedExamples: [],
+        terminologyNotes: []
+      }
+    ],
+    frontMatter: {
+      narrative: [paragraph(identity), paragraph(provenance)],
+      principles: [],
+      ...keyFacts.length > 0 ? { keyFacts } : {},
+      glossary: []
+    },
+    facts,
+    writerModelId: DRAFT_GUIDE_WRITER
+  };
 }
 
 // ../../../src/usecases/bridge-signals.ts
@@ -25702,6 +26020,14 @@ var ManifestSchema = external_exports2.object({
   // .nullish(): the docs teach clearing this to null when no aspect is in
   // progress, and rejecting that was a pure round-trip tax.
   currentAspect: external_exports2.string().nullish(),
+  /**
+   * The relevance band this run committed to at §1.5 (0 core · 1-2 capsule ·
+   * 3 never-ranked=full). check:"aspects" reads it: a capsule (band 1 or 2)
+   * legitimately has exactly ONE aspect, where full depth must chapter into
+   * 3–8. Optional — a pre-band manifest gets full-depth treatment, never a
+   * laxer gate.
+   */
+  relevanceBand: external_exports2.number().int().optional(),
   notes: external_exports2.array(external_exports2.string()).default([])
 });
 var ReadlogLineSchema = external_exports2.union([
@@ -25725,6 +26051,9 @@ var MANIFEST_EXAMPLE = {
     { key: "risk-controls", status: "pending" }
   ],
   currentAspect: "risk-controls",
+  // The band this run committed to at §1.5 — a resume must not re-derive it,
+  // and check:"aspects" allows a single aspect only when this is 2 (capsule).
+  relevanceBand: 0,
   notes: ["closureUnavailable \u2014 seeded from grep over card/limit/authorization"]
 };
 var MANIFEST_MINIMAL = {
@@ -26181,9 +26510,16 @@ function resolveAspects(runDir) {
   const keys = aspectsInput.map((a) => a.key);
   const dupKey = keys.find((k, i) => keys.indexOf(k) !== i);
   if (dupKey) throw new GateError(`duplicate aspect key "${dupKey}"`);
-  if (aspectsInput.length < 3 || aspectsInput.length > 8) {
+  let capsule = false;
+  try {
+    const manifest = ManifestSchema.parse(readJson3(runDir, "manifest.json"));
+    capsule = manifest.relevanceBand === 1 || manifest.relevanceBand === 2;
+  } catch {
+  }
+  const minAspects = capsule ? 1 : 3;
+  if (aspectsInput.length < minAspects || aspectsInput.length > 8) {
     throw new GateError(
-      `aspects.json must have 3-8 aspects (found ${aspectsInput.length})`
+      capsule ? `aspects.json must have 1-8 aspects for a capsule run (found ${aspectsInput.length})` : `aspects.json must have 3-8 aspects (found ${aspectsInput.length}) \u2014 a single-aspect plan is only valid for a capsule run (manifest.relevanceBand: 1 or 2)`
     );
   }
   const selected = filesJson.files.map((f) => f.path);
@@ -27081,13 +27417,513 @@ function assembleGuide(params) {
   }
 }
 
-// src/scan/facts.ts
-import { writeFile } from "node:fs/promises";
+// src/scan/select.ts
+import { readdir as readdir2 } from "node:fs/promises";
+import { join as join20, relative as relative10 } from "node:path";
+
+// src/scan/graph.ts
+import { readFile as readFile11 } from "node:fs/promises";
 import { join as join19 } from "node:path";
 
-// ../../../src/infrastructure/facts/collect-facts.ts
-import { readFile as readFile10, readdir as readdir2, stat } from "node:fs/promises";
+// ../../../src/infrastructure/parsing/build-import-graph.ts
+import { posix } from "node:path";
+
+// ../../../src/infrastructure/parsing/extract-ts-module-facts.ts
+var RE_DECL = /^\s*export\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?(?:abstract\s+)?(?:const|let|var|function\*?|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm;
+var RE_STAR_AS = /export\s*\*\s*as\s+[A-Za-z_$][\w$]*\s*from\s*['"]([^'"]+)['"]/g;
+var RE_STAR = /export\s*\*\s*from\s*['"]([^'"]+)['"]/g;
+var RE_BRACED = /export\s*(?:type\s+)?\{([^}]*)\}\s*(?:from\s*['"]([^'"]+)['"])?/g;
+var RE_IMPORT = /\bimport\s+(?:type\s+)?([^;'"]*?)\s+from\s*['"]([^'"]+)['"]/g;
+var RE_IMPORT_BARE = /\bimport\s*['"]([^'"]+)['"]/g;
+var RE_IMPORT_DYNAMIC = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
+function stripComments2(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+function parseBindings(clause) {
+  return clause.split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
+    const halves = part.replace(/^type\s+/, "").split(/\s+as\s+/).map((h) => h.trim());
+    const source = halves[0] ?? "";
+    return { source, exported: halves[1] ?? source };
+  }).filter((b) => b.source.length > 0 && b.source !== "type");
+}
+function parseImportClause(clause) {
+  const braced = clause.match(/\{([^}]*)\}/);
+  const star = /\*\s+as\s+/.test(clause);
+  if (braced) {
+    return { symbols: parseBindings(braced[1]).map((b) => b.source), namespace: false };
+  }
+  return { symbols: [], namespace: star || clause.trim().length > 0 };
+}
+function extractTsModuleFacts(source) {
+  const src = stripComments2(source);
+  const imports = [];
+  const ownExports = /* @__PURE__ */ new Set();
+  const starTargets = [];
+  const namedReexports = /* @__PURE__ */ new Map();
+  const reexportSpecs = [];
+  let m;
+  RE_DECL.lastIndex = 0;
+  while (m = RE_DECL.exec(src)) ownExports.add(m[1]);
+  const starAsSpecs = /* @__PURE__ */ new Set();
+  RE_STAR_AS.lastIndex = 0;
+  while (m = RE_STAR_AS.exec(src)) {
+    starAsSpecs.add(m[1]);
+    reexportSpecs.push(m[1]);
+  }
+  RE_STAR.lastIndex = 0;
+  while (m = RE_STAR.exec(src)) {
+    if (starAsSpecs.has(m[1])) continue;
+    starTargets.push(m[1]);
+    reexportSpecs.push(m[1]);
+  }
+  RE_BRACED.lastIndex = 0;
+  while (m = RE_BRACED.exec(src)) {
+    const bindings = parseBindings(m[1]);
+    const spec = m[2];
+    if (spec) {
+      reexportSpecs.push(spec);
+      for (const b of bindings) {
+        namedReexports.set(b.exported, { spec, source: b.source });
+      }
+    } else {
+      for (const b of bindings) ownExports.add(b.exported);
+    }
+  }
+  RE_IMPORT.lastIndex = 0;
+  while (m = RE_IMPORT.exec(src)) {
+    const { symbols, namespace } = parseImportClause(m[1]);
+    imports.push({ spec: m[2], symbols, namespace });
+  }
+  for (const re of [RE_IMPORT_BARE, RE_IMPORT_DYNAMIC]) {
+    re.lastIndex = 0;
+    while (m = re.exec(src)) {
+      imports.push({ spec: m[1], symbols: [], namespace: true });
+    }
+  }
+  return { imports, ownExports, starTargets, namedReexports, reexportSpecs };
+}
+
+// ../../../src/infrastructure/parsing/build-import-graph.ts
+var RESOLVE_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+function buildImportGraph(sources, aliases = /* @__PURE__ */ new Map()) {
+  const files = new Set(sources.keys());
+  const facts = /* @__PURE__ */ new Map();
+  for (const [path, source] of sources) {
+    facts.set(path, extractTsModuleFacts(source));
+  }
+  const asFile = (base) => {
+    for (const ext of RESOLVE_EXTS) if (files.has(base + ext)) return base + ext;
+    for (const ext of RESOLVE_EXTS) {
+      if (files.has(`${base}/index${ext}`)) return `${base}/index${ext}`;
+    }
+    return files.has(base) ? base : null;
+  };
+  const matchAlias = (spec) => {
+    let best = null;
+    for (const alias of aliases.keys()) {
+      if (spec !== alias && !spec.startsWith(`${alias}/`)) continue;
+      if (!best || alias.length > best.length) best = alias;
+    }
+    return best;
+  };
+  const resolve4 = (from, spec) => {
+    if (spec.startsWith(".")) {
+      const base = posix.normalize(posix.join(posix.dirname(from), spec));
+      const path2 = asFile(base);
+      return path2 ? { path: path2, local: true } : null;
+    }
+    const alias = matchAlias(spec);
+    if (!alias) return null;
+    const target = aliases.get(alias);
+    const rest = spec.slice(alias.length);
+    if (!rest) {
+      const path2 = asFile(target);
+      return path2 ? { path: path2, local: false } : null;
+    }
+    const root = target.replace(/\/index\.[cm]?[jt]sx?$/, "");
+    const path = asFile(root + rest) ?? asFile(target);
+    return path ? { path, local: false } : null;
+  };
+  const isBarrel = (path) => {
+    if (!/\/index\.[cm]?[jt]sx?$/.test(path)) return false;
+    const f = facts.get(path);
+    return (f?.starTargets.length ?? 0) > 0 || (f?.namedReexports.size ?? 0) > 0;
+  };
+  const definerOf = (file2, symbol2, seen = /* @__PURE__ */ new Set()) => {
+    if (seen.has(file2)) return null;
+    seen.add(file2);
+    const f = facts.get(file2);
+    if (!f) return null;
+    if (f.ownExports.has(symbol2)) return file2;
+    const named = f.namedReexports.get(symbol2);
+    if (named) {
+      const next = resolve4(file2, named.spec);
+      if (next) return definerOf(next.path, named.source, seen) ?? next.path;
+    }
+    for (const star of f.starTargets) {
+      const next = resolve4(file2, star);
+      if (!next) continue;
+      const hit = definerOf(next.path, symbol2, seen);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const edges = [];
+  const deduped = /* @__PURE__ */ new Set();
+  const push = (from, to, symbol2, local) => {
+    if (!to || to === from) return;
+    const key = `${from}\0${to}\0${symbol2}`;
+    if (deduped.has(key)) return;
+    deduped.add(key);
+    edges.push({ from, to, symbol: symbol2, local });
+  };
+  let barrelPrecise = 0;
+  let barrelFallback = 0;
+  let unresolved = 0;
+  for (const [from, f] of facts) {
+    for (const ref of f.imports) {
+      const target = resolve4(from, ref.spec);
+      if (!target) {
+        unresolved++;
+        continue;
+      }
+      const throughBarrel = isBarrel(target.path);
+      if (throughBarrel && ref.symbols.length > 0 && !ref.namespace) {
+        for (const symbol2 of ref.symbols) {
+          const definer = definerOf(target.path, symbol2);
+          if (definer) {
+            barrelPrecise++;
+            push(from, definer, symbol2, target.local);
+          } else {
+            barrelFallback++;
+            push(from, target.path, symbol2, target.local);
+          }
+        }
+        continue;
+      }
+      if (throughBarrel) barrelFallback++;
+      push(
+        from,
+        target.path,
+        ref.namespace ? "*" : ref.symbols[0] ?? "*",
+        target.local
+      );
+    }
+    for (const spec of f.reexportSpecs) {
+      const target = resolve4(from, spec);
+      if (!target) {
+        unresolved++;
+        continue;
+      }
+      push(from, target.path, "*", target.local);
+    }
+  }
+  return { edges, stats: { barrelPrecise, barrelFallback, unresolved } };
+}
+
+// ../../../src/infrastructure/parsing/extract-ts-symbols.ts
+var TS_ENTRY_HINTS = [
+  /\/api\//i,
+  /\/routes?\//i,
+  /controller/i,
+  /resolver/i,
+  /handler/i,
+  /\/jobs?\//i,
+  /worker/i,
+  /\/pages?\//i,
+  /middleware/i,
+  /\.route\./i
+];
+var FUNCTION_RE = /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/;
+var CLASS_RE = /^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
+var ARROW_RE = /^\s*(?:export\s+)?(?:default\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)/;
+function extractTsSymbols(source, path, moduleKey, isEntryPoint) {
+  const symbols = [];
+  const lines = source.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i];
+    let name;
+    let kind = "function";
+    const cls = CLASS_RE.exec(text);
+    if (cls) {
+      name = cls[1];
+      kind = "class";
+    } else {
+      const fn = FUNCTION_RE.exec(text) ?? ARROW_RE.exec(text);
+      if (fn) {
+        name = fn[1];
+        kind = "function";
+      }
+    }
+    if (!name) continue;
+    symbols.push({
+      kind,
+      name,
+      path,
+      line: i + 1,
+      moduleKey,
+      isEntryPoint
+    });
+  }
+  return symbols;
+}
+
+// ../../../src/infrastructure/parsing/tsconfig-paths.ts
+import { readFile as readFile10 } from "node:fs/promises";
 import { join as join18 } from "node:path";
+var CANDIDATES2 = ["tsconfig.base.json", "tsconfig.json"];
+function stripJsonComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+var stripWildcard = (s) => s.replace(/\/\*$/, "").replace(/^\.\//, "");
+async function loadPathAliases(localPath) {
+  for (const name of CANDIDATES2) {
+    let raw;
+    try {
+      raw = await readFile10(join18(localPath, name), "utf8");
+    } catch {
+      continue;
+    }
+    let paths;
+    try {
+      const parsed = JSON.parse(stripJsonComments(raw));
+      paths = typeof parsed === "object" && parsed !== null ? parsed.compilerOptions?.paths : void 0;
+    } catch {
+      continue;
+    }
+    if (typeof paths !== "object" || paths === null) continue;
+    const aliases = /* @__PURE__ */ new Map();
+    for (const [key, value] of Object.entries(paths)) {
+      const target = Array.isArray(value) ? value[0] : value;
+      if (typeof target !== "string") continue;
+      aliases.set(stripWildcard(key), stripWildcard(target));
+    }
+    if (aliases.size > 0) return aliases;
+  }
+  return /* @__PURE__ */ new Map();
+}
+
+// src/scan/graph.ts
+var TS_JS_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+var UNKNOWN_LANGUAGE_SHARE = 0.05;
+function isTsJs(path) {
+  return TS_JS_EXT.some((e) => path.endsWith(e)) && !path.endsWith(".d.ts");
+}
+function moduleKeyFor(relPath) {
+  return relPath.replace(/\.(tsx?|jsx?|mjs|cjs)$/, "");
+}
+function hashSource(source) {
+  return fnv1a64(source);
+}
+async function contentHashFor(graph, relPath) {
+  const cached2 = graph.sources.get(relPath);
+  if (cached2 !== void 0) return hashSource(cached2);
+  try {
+    return hashSource(await readFile11(join19(graph.repoRoot, relPath), "utf8"));
+  } catch {
+    return "unreadable";
+  }
+}
+async function buildScanGraph(repoRoot2, allFiles) {
+  const tsFiles = allFiles.filter(isTsJs);
+  const sources = /* @__PURE__ */ new Map();
+  await Promise.all(
+    tsFiles.map(async (rel) => {
+      try {
+        sources.set(rel, await readFile11(join19(repoRoot2, rel), "utf8"));
+      } catch {
+      }
+    })
+  );
+  const aliases = await loadPathAliases(repoRoot2);
+  const graph = buildImportGraph(sources, aliases);
+  const entryPoints = /* @__PURE__ */ new Set();
+  for (const [rel, source] of sources) {
+    const isEntry = TS_ENTRY_HINTS.some((h) => h.test(rel));
+    if (!isEntry) continue;
+    if (extractTsSymbols(source, rel, moduleKeyFor(rel), true).length > 0) {
+      entryPoints.add(rel);
+    }
+  }
+  const share = allFiles.length === 0 ? 0 : tsFiles.length / allFiles.length;
+  const language = share < UNKNOWN_LANGUAGE_SHARE ? "unknown" : "typescript";
+  return {
+    repoRoot: repoRoot2,
+    allFiles,
+    tsFiles,
+    edges: graph.edges,
+    entryPoints,
+    language,
+    sources
+  };
+}
+
+// src/scan/select.ts
+var TEST_FILE2 = /\.(spec|test)\.[jt]sx?$|__tests__|__mocks__|_spec\.rb$/;
+var NOISE_DIRS = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  "vendor",
+  "tmp",
+  ".next",
+  ".turbo",
+  ".cache",
+  "__snapshots__"
+]);
+var NOISE_BASENAME = [
+  /\.test\./i,
+  /\.spec\./i,
+  /_test\./i,
+  /_spec\./i,
+  /\.min\./i,
+  /\.d\.ts$/i,
+  /\.snap$/i,
+  /\.map$/i
+];
+var WALK_SKIP = /* @__PURE__ */ new Set([
+  "node_modules",
+  ".git",
+  ".next",
+  ".turbo",
+  "dist",
+  "build",
+  "out",
+  "coverage",
+  "vendor",
+  "tmp"
+]);
+function isNoiseSeed(path) {
+  const segs = path.split("/");
+  if (segs.some((s) => NOISE_DIRS.has(s))) return true;
+  const base = segs[segs.length - 1] ?? path;
+  return NOISE_BASENAME.some((re) => re.test(base));
+}
+async function walkAll(root, dir, out) {
+  let entries;
+  try {
+    entries = await readdir2(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const e of entries) {
+    if (e.name.startsWith(".") && e.name !== ".") {
+      if (WALK_SKIP.has(e.name)) continue;
+    }
+    const full = join20(dir, e.name);
+    if (e.isDirectory()) {
+      if (WALK_SKIP.has(e.name)) continue;
+      await walkAll(root, full, out);
+    } else if (e.isFile()) {
+      out.push(relative10(root, full));
+    }
+  }
+}
+async function listRepoFiles(repoRoot2) {
+  const tracked = await gitListFiles(repoRoot2);
+  if (tracked && tracked.length > 0) return tracked;
+  const out = [];
+  await walkAll(repoRoot2, repoRoot2, out);
+  return out;
+}
+var MAX_CLOSURE_FILES = 300;
+var AUTO_FORWARD_DEPTH = 2;
+async function selectGuideFiles(params) {
+  const { repoRoot: repoRoot2, globs, maxForwardDepth } = params;
+  const allFiles = params.allFiles ?? await listRepoFiles(repoRoot2);
+  const graph = await buildScanGraph(repoRoot2, allFiles);
+  const candidates = allFiles.filter((f) => !isNoiseSeed(f));
+  const seed = candidates.filter((f) => globs.some((g) => matchesGlob(f, g)));
+  const globHits = globs.map((glob) => ({
+    glob,
+    seedHits: candidates.filter((f) => matchesGlob(f, glob)).length,
+    unsupported: unsupportedGlob(glob)
+  }));
+  let closurePaths;
+  let reached;
+  let prunedSet = /* @__PURE__ */ new Set();
+  let autoDepthCap = null;
+  const closureUnavailable = graph.language === "unknown";
+  if (closureUnavailable) {
+    closurePaths = seed.filter((p) => !TEST_FILE2.test(p));
+    reached = closurePaths.map((p) => ({ path: p, reason: "seed", depth: 0 }));
+  } else {
+    const walk2 = (depth) => computeReachableSet({
+      seed,
+      edges: graph.edges,
+      policy: depth != null ? { maxForwardDepth: depth } : void 0
+    });
+    let reachable = walk2(maxForwardDepth);
+    if (maxForwardDepth == null && reachable.files.length > MAX_CLOSURE_FILES) {
+      const capped = walk2(AUTO_FORWARD_DEPTH);
+      autoDepthCap = {
+        maxForwardDepth: AUTO_FORWARD_DEPTH,
+        before: reachable.files.length,
+        after: capped.files.length
+      };
+      reachable = capped;
+    }
+    reached = [...reachable.files];
+    closurePaths = reachable.files.map((f) => f.path).filter((p) => !TEST_FILE2.test(p));
+    const prune = pruneGuideFiles({
+      closureFiles: closurePaths,
+      seedPaths: new Set(seed),
+      claimPaths: /* @__PURE__ */ new Set(),
+      entryPoints: graph.entryPoints,
+      edges: graph.edges
+    });
+    prunedSet = new Set(prune.pruned);
+  }
+  const seedSet = new Set(seed);
+  const depthByPath = new Map(reached.map((r) => [r.path, r.depth]));
+  const files = await buildSelectedFiles(
+    graph,
+    closurePaths,
+    seedSet,
+    graph.entryPoints,
+    prunedSet,
+    depthByPath
+  );
+  return {
+    language: graph.language,
+    closureUnavailable,
+    files,
+    seed,
+    pruned: [...prunedSet],
+    reached,
+    globHits,
+    autoDepthCap,
+    counts: {
+      allFiles: allFiles.length,
+      seed: seed.length,
+      closure: closurePaths.length,
+      pruned: prunedSet.size
+    }
+  };
+}
+async function buildSelectedFiles(graph, paths, seedSet, entryPoints, prunedSet, depthByPath) {
+  return Promise.all(
+    paths.map(async (path) => ({
+      path,
+      contentHash: await contentHashFor(graph, path),
+      seed: seedSet.has(path),
+      entryPoint: entryPoints.has(path),
+      pruned: prunedSet.has(path),
+      depth: depthByPath.get(path) ?? (seedSet.has(path) ? 0 : 1)
+    }))
+  );
+}
+
+// src/scan/facts.ts
+import { writeFile } from "node:fs/promises";
+import { join as join22 } from "node:path";
+
+// ../../../src/infrastructure/facts/collect-facts.ts
+import { readFile as readFile12, readdir as readdir3, stat } from "node:fs/promises";
+import { join as join21 } from "node:path";
 
 // ../../../src/infrastructure/facts/extract-seed-enums.ts
 var INSERT_RE = /INSERT INTO\s+"?(?:public"?\s*\.\s*)?"?(\w+)"?\s*\(([^)]*)\)\s*VALUES\s*((?:[^;']|'(?:[^']|'')*')*);/gi;
@@ -27929,7 +28765,7 @@ var StackFactCollector = class {
     facts.push(...routeFacts);
     const schemaSources = [];
     for (const probe of SCHEMA_PROBES2) {
-      const raw = await readOptional3(join18(input.localPath, probe.path));
+      const raw = await readOptional3(join21(input.localPath, probe.path));
       if (raw) schemaSources.push({ path: probe.path, models: probe.parse(raw) });
     }
     const allModels = schemaSources.flatMap((s) => s.models);
@@ -28040,7 +28876,7 @@ var StackFactCollector = class {
     };
     const seenRoutines = /* @__PURE__ */ new Set();
     for (const rel of await probeCronFiles(input.localPath)) {
-      const yaml = await readOptional3(join18(input.localPath, rel));
+      const yaml = await readOptional3(join21(input.localPath, rel));
       if (!yaml) continue;
       for (const fact of cronRoutineFacts(rel, yaml, isRelevant, PERSIST_CAP)) {
         if (seenRoutines.has(fact.key)) continue;
@@ -28182,10 +29018,10 @@ async function readSources(root, files) {
   const out = /* @__PURE__ */ new Map();
   for (const rel of files) {
     try {
-      const abs = join18(root, rel);
+      const abs = join21(root, rel);
       const s = await stat(abs);
       if (s.size > MAX_FILE_BYTES) continue;
-      out.set(rel, await readFile10(abs, "utf8"));
+      out.set(rel, await readFile12(abs, "utf8"));
     } catch {
     }
   }
@@ -28193,7 +29029,7 @@ async function readSources(root, files) {
 }
 async function readOptional3(absPath) {
   try {
-    return await readFile10(absPath, "utf8");
+    return await readFile12(absPath, "utf8");
   } catch {
     return null;
   }
@@ -28203,7 +29039,7 @@ async function probeCronFiles(root) {
   for (const dir of CRON_PROBE_DIRS) {
     let entries = [];
     try {
-      entries = await readdir2(join18(root, dir));
+      entries = await readdir3(join21(root, dir));
     } catch {
       continue;
     }
@@ -28224,7 +29060,7 @@ async function readSeedSql(root, tables) {
   for (const dir of SEED_SQL_DIRS) {
     let paths = [];
     try {
-      paths = await walkFiles(join18(root, dir), ".sql");
+      paths = await walkFiles(join21(root, dir), ".sql");
     } catch {
       continue;
     }
@@ -28234,7 +29070,7 @@ async function readSeedSql(root, tables) {
       try {
         const s = await stat(abs);
         if (s.size > MAX_FILE_BYTES) continue;
-        out.set(rel, await readFile10(abs, "utf8"));
+        out.set(rel, await readFile12(abs, "utf8"));
       } catch {
       }
     }
@@ -28254,511 +29090,144 @@ async function collectScanFacts(params) {
   const summary = summarizeFacts(facts);
   if (params.runDir) {
     await writeFile(
-      join19(params.runDir, "facts.json"),
+      join22(params.runDir, "facts.json"),
       JSON.stringify(facts, null, 2)
     );
   }
   return { facts, summary };
 }
 
-// src/scan/select.ts
-import { readdir as readdir3 } from "node:fs/promises";
-import { join as join22, relative as relative10 } from "node:path";
-
-// src/scan/graph.ts
-import { readFile as readFile12 } from "node:fs/promises";
-import { join as join21 } from "node:path";
-
-// ../../../src/infrastructure/parsing/build-import-graph.ts
-import { posix } from "node:path";
-
-// ../../../src/infrastructure/parsing/extract-ts-module-facts.ts
-var RE_DECL = /^\s*export\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?(?:abstract\s+)?(?:const|let|var|function\*?|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm;
-var RE_STAR_AS = /export\s*\*\s*as\s+[A-Za-z_$][\w$]*\s*from\s*['"]([^'"]+)['"]/g;
-var RE_STAR = /export\s*\*\s*from\s*['"]([^'"]+)['"]/g;
-var RE_BRACED = /export\s*(?:type\s+)?\{([^}]*)\}\s*(?:from\s*['"]([^'"]+)['"])?/g;
-var RE_IMPORT = /\bimport\s+(?:type\s+)?([^;'"]*?)\s+from\s*['"]([^'"]+)['"]/g;
-var RE_IMPORT_BARE = /\bimport\s*['"]([^'"]+)['"]/g;
-var RE_IMPORT_DYNAMIC = /\bimport\(\s*['"]([^'"]+)['"]\s*\)/g;
-function stripComments2(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-function parseBindings(clause) {
-  return clause.split(",").map((part) => part.trim()).filter(Boolean).map((part) => {
-    const halves = part.replace(/^type\s+/, "").split(/\s+as\s+/).map((h) => h.trim());
-    const source = halves[0] ?? "";
-    return { source, exported: halves[1] ?? source };
-  }).filter((b) => b.source.length > 0 && b.source !== "type");
-}
-function parseImportClause(clause) {
-  const braced = clause.match(/\{([^}]*)\}/);
-  const star = /\*\s+as\s+/.test(clause);
-  if (braced) {
-    return { symbols: parseBindings(braced[1]).map((b) => b.source), namespace: false };
+// src/scan/draft-guide.ts
+async function draftGuidesForRepo(params) {
+  const { repoRoot: repoRoot2, api, repoSlug, log: log2 } = params;
+  const taxonomy = await getTaxonomy(api, repoSlug, "full");
+  if (!taxonomy.ok) {
+    return {
+      pushed: 0,
+      skipped: 0,
+      failed: 0,
+      fatal: `taxonomy fetch failed (${taxonomy.status}): ${taxonomy.error}`
+    };
   }
-  return { symbols: [], namespace: star || clause.trim().length > 0 };
-}
-function extractTsModuleFacts(source) {
-  const src = stripComments2(source);
-  const imports = [];
-  const ownExports = /* @__PURE__ */ new Set();
-  const starTargets = [];
-  const namedReexports = /* @__PURE__ */ new Map();
-  const reexportSpecs = [];
-  let m;
-  RE_DECL.lastIndex = 0;
-  while (m = RE_DECL.exec(src)) ownExports.add(m[1]);
-  const starAsSpecs = /* @__PURE__ */ new Set();
-  RE_STAR_AS.lastIndex = 0;
-  while (m = RE_STAR_AS.exec(src)) {
-    starAsSpecs.add(m[1]);
-    reexportSpecs.push(m[1]);
+  const approved = taxonomy.approved;
+  const domainNames = new Map(
+    approved.filter((n) => n.kind === "domain" || !n.parentKey).map((n) => [n.key, n.name])
+  );
+  const candidates = [];
+  for (const n of approved) {
+    if (n.kind !== "feature" || !n.parentKey) continue;
+    if (n.hasGuide) continue;
+    const key = `${n.parentKey}/${n.key}`;
+    if (params.only && params.only !== key) continue;
+    const globs = n.boundary?.globs ?? [];
+    if (globs.length === 0) {
+      log2(`\u23ED ${key} \xB7 no boundary \u2014 run /kanon:discover to derive one`);
+      continue;
+    }
+    candidates.push({ node: n, domainKey: n.parentKey, globs });
   }
-  RE_STAR.lastIndex = 0;
-  while (m = RE_STAR.exec(src)) {
-    if (starAsSpecs.has(m[1])) continue;
-    starTargets.push(m[1]);
-    reexportSpecs.push(m[1]);
+  if (candidates.length === 0) {
+    log2(
+      params.only ? `nothing to draft \u2014 ${params.only} not found, already guided, or boundary-less` : "nothing to draft \u2014 every approved feature has a guide or no boundary"
+    );
+    return { pushed: 0, skipped: 0, failed: 0, fatal: null };
   }
-  RE_BRACED.lastIndex = 0;
-  while (m = RE_BRACED.exec(src)) {
-    const bindings = parseBindings(m[1]);
-    const spec = m[2];
-    if (spec) {
-      reexportSpecs.push(spec);
-      for (const b of bindings) {
-        namedReexports.set(b.exported, { spec, source: b.source });
-      }
-    } else {
-      for (const b of bindings) ownExports.add(b.exported);
-    }
+  const [head, dirty, commitTime] = await Promise.all([
+    gitHead(repoRoot2),
+    gitDirty(repoRoot2),
+    gitCommitTimeUtc(repoRoot2)
+  ]);
+  if (!head || !commitTime) {
+    return {
+      pushed: 0,
+      skipped: 0,
+      failed: 0,
+      fatal: "no commit at HEAD \u2014 a draft pins the commit it read, commit first"
+    };
   }
-  RE_IMPORT.lastIndex = 0;
-  while (m = RE_IMPORT.exec(src)) {
-    const { symbols, namespace } = parseImportClause(m[1]);
-    imports.push({ spec: m[2], symbols, namespace });
-  }
-  for (const re of [RE_IMPORT_BARE, RE_IMPORT_DYNAMIC]) {
-    re.lastIndex = 0;
-    while (m = re.exec(src)) {
-      imports.push({ spec: m[1], symbols: [], namespace: true });
-    }
-  }
-  return { imports, ownExports, starTargets, namedReexports, reexportSpecs };
-}
-
-// ../../../src/infrastructure/parsing/build-import-graph.ts
-var RESOLVE_EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
-function buildImportGraph(sources, aliases = /* @__PURE__ */ new Map()) {
-  const files = new Set(sources.keys());
-  const facts = /* @__PURE__ */ new Map();
-  for (const [path, source] of sources) {
-    facts.set(path, extractTsModuleFacts(source));
-  }
-  const asFile = (base) => {
-    for (const ext of RESOLVE_EXTS) if (files.has(base + ext)) return base + ext;
-    for (const ext of RESOLVE_EXTS) {
-      if (files.has(`${base}/index${ext}`)) return `${base}/index${ext}`;
-    }
-    return files.has(base) ? base : null;
-  };
-  const matchAlias = (spec) => {
-    let best = null;
-    for (const alias of aliases.keys()) {
-      if (spec !== alias && !spec.startsWith(`${alias}/`)) continue;
-      if (!best || alias.length > best.length) best = alias;
-    }
-    return best;
-  };
-  const resolve4 = (from, spec) => {
-    if (spec.startsWith(".")) {
-      const base = posix.normalize(posix.join(posix.dirname(from), spec));
-      const path2 = asFile(base);
-      return path2 ? { path: path2, local: true } : null;
-    }
-    const alias = matchAlias(spec);
-    if (!alias) return null;
-    const target = aliases.get(alias);
-    const rest = spec.slice(alias.length);
-    if (!rest) {
-      const path2 = asFile(target);
-      return path2 ? { path: path2, local: false } : null;
-    }
-    const root = target.replace(/\/index\.[cm]?[jt]sx?$/, "");
-    const path = asFile(root + rest) ?? asFile(target);
-    return path ? { path, local: false } : null;
-  };
-  const isBarrel = (path) => {
-    if (!/\/index\.[cm]?[jt]sx?$/.test(path)) return false;
-    const f = facts.get(path);
-    return (f?.starTargets.length ?? 0) > 0 || (f?.namedReexports.size ?? 0) > 0;
-  };
-  const definerOf = (file2, symbol2, seen = /* @__PURE__ */ new Set()) => {
-    if (seen.has(file2)) return null;
-    seen.add(file2);
-    const f = facts.get(file2);
-    if (!f) return null;
-    if (f.ownExports.has(symbol2)) return file2;
-    const named = f.namedReexports.get(symbol2);
-    if (named) {
-      const next = resolve4(file2, named.spec);
-      if (next) return definerOf(next.path, named.source, seen) ?? next.path;
-    }
-    for (const star of f.starTargets) {
-      const next = resolve4(file2, star);
-      if (!next) continue;
-      const hit = definerOf(next.path, symbol2, seen);
-      if (hit) return hit;
-    }
-    return null;
-  };
-  const edges = [];
-  const deduped = /* @__PURE__ */ new Set();
-  const push = (from, to, symbol2, local) => {
-    if (!to || to === from) return;
-    const key = `${from}\0${to}\0${symbol2}`;
-    if (deduped.has(key)) return;
-    deduped.add(key);
-    edges.push({ from, to, symbol: symbol2, local });
-  };
-  let barrelPrecise = 0;
-  let barrelFallback = 0;
-  let unresolved = 0;
-  for (const [from, f] of facts) {
-    for (const ref of f.imports) {
-      const target = resolve4(from, ref.spec);
-      if (!target) {
-        unresolved++;
+  const schema = loadGuideSchema(params.pluginRoot);
+  const validator = new Validator(
+    schema,
+    "2020-12",
+    false
+  );
+  let pushed = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const c of candidates) {
+    const key = `${c.domainKey}/${c.node.key}`;
+    try {
+      const selected = await selectGuideFiles({
+        repoRoot: repoRoot2,
+        globs: c.globs,
+        // Boundary files only — a fact sheet reads the feature's own code,
+        // not its dependency tree. This is the capsule closure rule.
+        maxForwardDepth: 0
+      });
+      if (selected.files.length === 0) {
+        skipped++;
+        log2(`\u23ED ${key} \xB7 boundary matched no files \u2014 fix the globs on review`);
         continue;
       }
-      const throughBarrel = isBarrel(target.path);
-      if (throughBarrel && ref.symbols.length > 0 && !ref.namespace) {
-        for (const symbol2 of ref.symbols) {
-          const definer = definerOf(target.path, symbol2);
-          if (definer) {
-            barrelPrecise++;
-            push(from, definer, symbol2, target.local);
-          } else {
-            barrelFallback++;
-            push(from, target.path, symbol2, target.local);
-          }
-        }
+      const { facts } = await collectScanFacts({
+        repoRoot: repoRoot2,
+        closureFiles: selected.files.map((f) => f.path),
+        reached: selected.reached
+      });
+      const feature = {
+        repoSlug,
+        domainKey: c.domainKey,
+        featureKey: c.node.key,
+        name: c.node.name,
+        domainName: domainNames.get(c.domainKey) ?? c.domainKey,
+        ...c.node.description !== void 0 ? { description: c.node.description } : {},
+        capabilities: c.node.capabilities ?? []
+      };
+      const bundle = compileDraftGuideBundle({
+        feature,
+        files: selected.files.map((f) => ({
+          path: f.path,
+          contentHash: f.contentHash
+        })),
+        facts,
+        commitSha: head,
+        dirty: dirty ?? false,
+        capturedAt: commitTime,
+        pluginVersion: params.pluginVersion
+      });
+      const valid = validator.validate(bundle);
+      if (!valid.valid) {
+        failed++;
+        const first = valid.errors[0];
+        log2(
+          `\u274C ${key} \xB7 draft failed schema validation (${valid.errors.length} issues${first ? `; first: ${first.instanceLocation} ${first.error}` : ""})`
+        );
         continue;
       }
-      if (throughBarrel) barrelFallback++;
-      push(
-        from,
-        target.path,
-        ref.namespace ? "*" : ref.symbols[0] ?? "*",
-        target.local
+      const r = await pushGuide(api, bundle, repoSlug, { mode: "draft" });
+      if (!r.ok) {
+        failed++;
+        log2(`\u274C ${key} \xB7 push failed (${r.status}): ${r.error}`);
+        continue;
+      }
+      if (r.skipped) {
+        skipped++;
+        log2(`\u23ED ${key} \xB7 a real guide already exists \u2014 draft not needed`);
+      } else {
+        pushed++;
+        log2(`\u2713 ${key} \xB7 ${facts.length} facts \xB7 fact sheet pushed`);
+      }
+    } catch (e) {
+      failed++;
+      log2(
+        `\u274C ${key} \xB7 ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`
       );
     }
-    for (const spec of f.reexportSpecs) {
-      const target = resolve4(from, spec);
-      if (!target) {
-        unresolved++;
-        continue;
-      }
-      push(from, target.path, "*", target.local);
-    }
   }
-  return { edges, stats: { barrelPrecise, barrelFallback, unresolved } };
-}
-
-// ../../../src/infrastructure/parsing/extract-ts-symbols.ts
-var TS_ENTRY_HINTS = [
-  /\/api\//i,
-  /\/routes?\//i,
-  /controller/i,
-  /resolver/i,
-  /handler/i,
-  /\/jobs?\//i,
-  /worker/i,
-  /\/pages?\//i,
-  /middleware/i,
-  /\.route\./i
-];
-var FUNCTION_RE = /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/;
-var CLASS_RE = /^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/;
-var ARROW_RE = /^\s*(?:export\s+)?(?:default\s+)?const\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*(?::[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)/;
-function extractTsSymbols(source, path, moduleKey, isEntryPoint) {
-  const symbols = [];
-  const lines = source.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    const text = lines[i];
-    let name;
-    let kind = "function";
-    const cls = CLASS_RE.exec(text);
-    if (cls) {
-      name = cls[1];
-      kind = "class";
-    } else {
-      const fn = FUNCTION_RE.exec(text) ?? ARROW_RE.exec(text);
-      if (fn) {
-        name = fn[1];
-        kind = "function";
-      }
-    }
-    if (!name) continue;
-    symbols.push({
-      kind,
-      name,
-      path,
-      line: i + 1,
-      moduleKey,
-      isEntryPoint
-    });
-  }
-  return symbols;
-}
-
-// ../../../src/infrastructure/parsing/tsconfig-paths.ts
-import { readFile as readFile11 } from "node:fs/promises";
-import { join as join20 } from "node:path";
-var CANDIDATES2 = ["tsconfig.base.json", "tsconfig.json"];
-function stripJsonComments(source) {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-}
-var stripWildcard = (s) => s.replace(/\/\*$/, "").replace(/^\.\//, "");
-async function loadPathAliases(localPath) {
-  for (const name of CANDIDATES2) {
-    let raw;
-    try {
-      raw = await readFile11(join20(localPath, name), "utf8");
-    } catch {
-      continue;
-    }
-    let paths;
-    try {
-      const parsed = JSON.parse(stripJsonComments(raw));
-      paths = typeof parsed === "object" && parsed !== null ? parsed.compilerOptions?.paths : void 0;
-    } catch {
-      continue;
-    }
-    if (typeof paths !== "object" || paths === null) continue;
-    const aliases = /* @__PURE__ */ new Map();
-    for (const [key, value] of Object.entries(paths)) {
-      const target = Array.isArray(value) ? value[0] : value;
-      if (typeof target !== "string") continue;
-      aliases.set(stripWildcard(key), stripWildcard(target));
-    }
-    if (aliases.size > 0) return aliases;
-  }
-  return /* @__PURE__ */ new Map();
-}
-
-// src/scan/graph.ts
-var TS_JS_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
-var UNKNOWN_LANGUAGE_SHARE = 0.05;
-function isTsJs(path) {
-  return TS_JS_EXT.some((e) => path.endsWith(e)) && !path.endsWith(".d.ts");
-}
-function moduleKeyFor(relPath) {
-  return relPath.replace(/\.(tsx?|jsx?|mjs|cjs)$/, "");
-}
-function hashSource(source) {
-  return fnv1a64(source);
-}
-async function contentHashFor(graph, relPath) {
-  const cached2 = graph.sources.get(relPath);
-  if (cached2 !== void 0) return hashSource(cached2);
-  try {
-    return hashSource(await readFile12(join21(graph.repoRoot, relPath), "utf8"));
-  } catch {
-    return "unreadable";
-  }
-}
-async function buildScanGraph(repoRoot2, allFiles) {
-  const tsFiles = allFiles.filter(isTsJs);
-  const sources = /* @__PURE__ */ new Map();
-  await Promise.all(
-    tsFiles.map(async (rel) => {
-      try {
-        sources.set(rel, await readFile12(join21(repoRoot2, rel), "utf8"));
-      } catch {
-      }
-    })
+  log2(
+    `drafts done \u2014 ${pushed} pushed \xB7 ${skipped} skipped \xB7 ${failed} failed (of ${candidates.length})`
   );
-  const aliases = await loadPathAliases(repoRoot2);
-  const graph = buildImportGraph(sources, aliases);
-  const entryPoints = /* @__PURE__ */ new Set();
-  for (const [rel, source] of sources) {
-    const isEntry = TS_ENTRY_HINTS.some((h) => h.test(rel));
-    if (!isEntry) continue;
-    if (extractTsSymbols(source, rel, moduleKeyFor(rel), true).length > 0) {
-      entryPoints.add(rel);
-    }
-  }
-  const share = allFiles.length === 0 ? 0 : tsFiles.length / allFiles.length;
-  const language = share < UNKNOWN_LANGUAGE_SHARE ? "unknown" : "typescript";
-  return {
-    repoRoot: repoRoot2,
-    allFiles,
-    tsFiles,
-    edges: graph.edges,
-    entryPoints,
-    language,
-    sources
-  };
-}
-
-// src/scan/select.ts
-var TEST_FILE2 = /\.(spec|test)\.[jt]sx?$|__tests__|__mocks__|_spec\.rb$/;
-var NOISE_DIRS = /* @__PURE__ */ new Set([
-  "node_modules",
-  ".git",
-  "dist",
-  "build",
-  "out",
-  "coverage",
-  "vendor",
-  "tmp",
-  ".next",
-  ".turbo",
-  ".cache",
-  "__snapshots__"
-]);
-var NOISE_BASENAME = [
-  /\.test\./i,
-  /\.spec\./i,
-  /_test\./i,
-  /_spec\./i,
-  /\.min\./i,
-  /\.d\.ts$/i,
-  /\.snap$/i,
-  /\.map$/i
-];
-var WALK_SKIP = /* @__PURE__ */ new Set([
-  "node_modules",
-  ".git",
-  ".next",
-  ".turbo",
-  "dist",
-  "build",
-  "out",
-  "coverage",
-  "vendor",
-  "tmp"
-]);
-function isNoiseSeed(path) {
-  const segs = path.split("/");
-  if (segs.some((s) => NOISE_DIRS.has(s))) return true;
-  const base = segs[segs.length - 1] ?? path;
-  return NOISE_BASENAME.some((re) => re.test(base));
-}
-async function walkAll(root, dir, out) {
-  let entries;
-  try {
-    entries = await readdir3(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const e of entries) {
-    if (e.name.startsWith(".") && e.name !== ".") {
-      if (WALK_SKIP.has(e.name)) continue;
-    }
-    const full = join22(dir, e.name);
-    if (e.isDirectory()) {
-      if (WALK_SKIP.has(e.name)) continue;
-      await walkAll(root, full, out);
-    } else if (e.isFile()) {
-      out.push(relative10(root, full));
-    }
-  }
-}
-async function listRepoFiles(repoRoot2) {
-  const tracked = await gitListFiles(repoRoot2);
-  if (tracked && tracked.length > 0) return tracked;
-  const out = [];
-  await walkAll(repoRoot2, repoRoot2, out);
-  return out;
-}
-var MAX_CLOSURE_FILES = 300;
-var AUTO_FORWARD_DEPTH = 2;
-async function selectGuideFiles(params) {
-  const { repoRoot: repoRoot2, globs, maxForwardDepth } = params;
-  const allFiles = params.allFiles ?? await listRepoFiles(repoRoot2);
-  const graph = await buildScanGraph(repoRoot2, allFiles);
-  const candidates = allFiles.filter((f) => !isNoiseSeed(f));
-  const seed = candidates.filter((f) => globs.some((g) => matchesGlob(f, g)));
-  const globHits = globs.map((glob) => ({
-    glob,
-    seedHits: candidates.filter((f) => matchesGlob(f, glob)).length,
-    unsupported: unsupportedGlob(glob)
-  }));
-  let closurePaths;
-  let reached;
-  let prunedSet = /* @__PURE__ */ new Set();
-  let autoDepthCap = null;
-  const closureUnavailable = graph.language === "unknown";
-  if (closureUnavailable) {
-    closurePaths = seed.filter((p) => !TEST_FILE2.test(p));
-    reached = closurePaths.map((p) => ({ path: p, reason: "seed", depth: 0 }));
-  } else {
-    const walk2 = (depth) => computeReachableSet({
-      seed,
-      edges: graph.edges,
-      policy: depth != null ? { maxForwardDepth: depth } : void 0
-    });
-    let reachable = walk2(maxForwardDepth);
-    if (maxForwardDepth == null && reachable.files.length > MAX_CLOSURE_FILES) {
-      const capped = walk2(AUTO_FORWARD_DEPTH);
-      autoDepthCap = {
-        maxForwardDepth: AUTO_FORWARD_DEPTH,
-        before: reachable.files.length,
-        after: capped.files.length
-      };
-      reachable = capped;
-    }
-    reached = [...reachable.files];
-    closurePaths = reachable.files.map((f) => f.path).filter((p) => !TEST_FILE2.test(p));
-    const prune = pruneGuideFiles({
-      closureFiles: closurePaths,
-      seedPaths: new Set(seed),
-      claimPaths: /* @__PURE__ */ new Set(),
-      entryPoints: graph.entryPoints,
-      edges: graph.edges
-    });
-    prunedSet = new Set(prune.pruned);
-  }
-  const seedSet = new Set(seed);
-  const depthByPath = new Map(reached.map((r) => [r.path, r.depth]));
-  const files = await buildSelectedFiles(
-    graph,
-    closurePaths,
-    seedSet,
-    graph.entryPoints,
-    prunedSet,
-    depthByPath
-  );
-  return {
-    language: graph.language,
-    closureUnavailable,
-    files,
-    seed,
-    pruned: [...prunedSet],
-    reached,
-    globHits,
-    autoDepthCap,
-    counts: {
-      allFiles: allFiles.length,
-      seed: seed.length,
-      closure: closurePaths.length,
-      pruned: prunedSet.size
-    }
-  };
-}
-async function buildSelectedFiles(graph, paths, seedSet, entryPoints, prunedSet, depthByPath) {
-  return Promise.all(
-    paths.map(async (path) => ({
-      path,
-      contentHash: await contentHashFor(graph, path),
-      seed: seedSet.has(path),
-      entryPoint: entryPoints.has(path),
-      pruned: prunedSet.has(path),
-      depth: depthByPath.get(path) ?? (seedSet.has(path) ? 0 : 1)
-    }))
-  );
+  return { pushed, skipped, failed, fatal: null };
 }
 
 // src/setup.ts
@@ -29100,13 +29569,54 @@ switch (command) {
     process.exit(r.ok ? 0 : 1);
     break;
   }
+  case "draft-guide": {
+    const rest = [...args];
+    let only;
+    const featureIdx = rest.indexOf("--feature");
+    if (featureIdx !== -1) {
+      only = rest[featureIdx + 1];
+      if (!only || only.startsWith("--")) {
+        fail2("usage: cli.js draft-guide [--feature <domain/feature>] [repoRoot]");
+      }
+      rest.splice(featureIdx, 2);
+    }
+    const root = rest[0] ? resolve3(rest[0]) : await repoRoot();
+    if (!config2.repoSlug) {
+      fail2("no repoSlug \u2014 run from a repo with .kanon/config.json or set KANON_REPO_SLUG");
+    }
+    const r = await draftGuidesForRepo({
+      repoRoot: root,
+      api: apiConfigOrFail(),
+      repoSlug: config2.repoSlug,
+      pluginRoot: config2.pluginRoot,
+      pluginVersion: pluginVersion(config2.pluginRoot),
+      ...only !== void 0 ? { only } : {},
+      log: (line) => console.log(line)
+    });
+    if (r.fatal) fail2(r.fatal);
+    process.exit(r.failed > 0 && r.pushed === 0 && r.skipped === 0 ? 1 : 0);
+    break;
+  }
   case "select-files": {
-    const runDir = args[0] ?? fail2("usage: cli.js select-files <runDir> <glob> [glob...]");
-    const globs = args.slice(1);
+    const runDir = args[0] ?? fail2("usage: cli.js select-files <runDir> [--max-forward-depth N] <glob> [glob...]");
+    const rest = args.slice(1);
+    let maxForwardDepth;
+    const depthIdx = rest.indexOf("--max-forward-depth");
+    if (depthIdx !== -1) {
+      const n = Number(rest[depthIdx + 1]);
+      if (!Number.isInteger(n) || n < 0) fail2("--max-forward-depth needs an integer \u2265 0");
+      maxForwardDepth = n;
+      rest.splice(depthIdx, 2);
+    }
+    const globs = rest;
     if (globs.length === 0) fail2("select-files needs at least one glob");
     const dir = resolve3(runDir);
     mkdirSync5(dir, { recursive: true });
-    const r = await selectGuideFiles({ repoRoot: await repoRoot(), globs });
+    const r = await selectGuideFiles({
+      repoRoot: await repoRoot(),
+      globs,
+      ...maxForwardDepth !== void 0 ? { maxForwardDepth } : {}
+    });
     const filesJson = {
       language: r.language,
       closureUnavailable: r.closureUnavailable,
@@ -29290,6 +29800,6 @@ load it with: ${result.loadCommand}`);
   }
   default:
     fail2(
-      "usage: cli.js <validate|assemble|setup-begin|setup-poll|whoami|discover-collect|apply-patch|select-files|collect-facts|assemble-guide|push-guide|push-tests|coverage-merge|daemon|worker-install|worker-uninstall> \u2026"
+      "usage: cli.js <validate|assemble|setup-begin|setup-poll|whoami|discover-collect|apply-patch|select-files|collect-facts|assemble-guide|draft-guide|push-guide|push-tests|coverage-merge|daemon|worker-install|worker-uninstall> \u2026"
     );
 }

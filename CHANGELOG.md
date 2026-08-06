@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.27.0 — 2026-08-05
+
+**The KB is populated in minutes; depth arrives where it matters.** A scan
+sweep no longer funnels through one four-hour dispatcher session — the Kanon
+server fans "scan everything" into one `draft_guides` task plus one banded
+scan task per approved feature, and the daemon runs them concurrently.
+
+- **`draft-guide` (new CLI command, new `draft_guides` worker task).** A
+  zero-LLM fact sheet per approved feature: boundary-only closure, the real
+  fact collector, a deterministic bundle compiler — pushed with
+  `mode: "draft"` in ~seconds per feature, no Claude session at all. The
+  server stores drafts unmetered with draft provenance: they never set
+  `hasGuide`, never consume a plan seat, never freshness-skip a real scan,
+  and are replaced in place by the first deep guide. Measured on the golden
+  dataset: **85.4% weighted inventory coverage for $0** (the fact-kinded
+  inventories all at 100%; only prose-matched entries are out of reach).
+- **The queue is the fleet.** Per-feature sweep tasks carry their relevance
+  band and claim in priority order (core first; a human's ad-hoc enqueue
+  never waits behind a sweep backlog). The daemon runs up to
+  `KANON_WORKER_CONCURRENCY` tasks at once (default 2), each feature in its
+  own session with its own 45-minute timeout, resume, and progress row —
+  batch-grouped in the runs ledger as `Scan sweep · n/m done`. Worktree
+  setup serializes on a per-repo lock so parallel tasks stop tripping over
+  git's ref locks. The daemon now declares `supportedTypes` on claim, so an
+  older daemon is never handed a task type it would crash on.
+- **Depth is pull, not push.** Bands 1–2 now scan as one-chapter CAPSULES by
+  default (`--sweep` members honor the band; an explicit `/kanon:scan
+  <feature>` still always runs full depth). Backed by a clean-room capsule
+  eval: **weighted 0.974 vs the full pipeline's 0.975**, depth 0.708,
+  inventory 0.944 — the one-chapter guide gives up chaptered breadth, not
+  completeness. Every capsule page carries "Deepen this guide".
+- **Capsule runs actually assemble now.** `check:"aspects"` accepted only
+  3–8 aspects, so the one-aspect capsule the depth policy mandates could
+  never pass; the gate now reads the manifest's `relevanceBand` (capsule =
+  1 aspect allowed). The `select-files` CLI twin also gained
+  `--max-forward-depth`, which capsules need and only the MCP twin had.
+
+
 ## 0.26.0 — 2026-08-05
 
 **The session edits the taxonomy; it no longer types it.** After 0.25.0 the
