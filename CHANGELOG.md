@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.28.0 — 2026-08-14
+
+**A scan that cannot be stored is refused before it costs anything.** The
+scanned-feature cap used to be discovered at the very last step, after the
+research was already paid for — and it arrived as an opaque HTTP 500, so the
+one refusal the product actually wants to have read like a server crash.
+
+- **Entitlement preflight.** `kanon_whoami` now reports `entitlement` — the
+  plan, features used/limit/remaining, `atLimit`, `lastSlot` and an
+  `upgradeUrl` — and §1 of `/kanon:scan` acts on it before a single file is
+  read. At the cap, a NEW feature is refused up front with the numbers and the
+  way out; re-scans of features that already have a guide are never blocked,
+  because they consume no quota, so they are offered as what still works. One
+  slot left is announced up front rather than discovered by spending it.
+- **A plan-limit push answers 403, not 500.** The server's guide route dropped
+  every error kind it did not name into a 500, so `AppError.forbidden` — which
+  deliberately carries `{limit, plan, current, max, upgradeTo}` for exactly
+  this purpose — lost its meaning in transit. It now maps to 403 and carries an
+  `upgradeUrl`, and the plugin turns that into one line that says the guide is
+  fine, the workspace is full, and re-pushing the same bundle lands it.
+- **The assembled bundle is treated as the artifact it is.** On a capped push
+  the run dir is kept, the manifest records `failed` with the reason, and the
+  report says the bundle re-pushes with no re-research — plus a warning when it
+  lives in a worktree that cleanup will delete.
+
+Requires a server new enough to send `entitlement`; against an older one the
+field is simply absent and the plugin proceeds exactly as before.
+
 ## 0.27.0 — 2026-08-05
 
 **The KB is populated in minutes; depth arrives where it matters.** A scan

@@ -14728,6 +14728,19 @@ function devicePoll(url, deviceCode) {
 function whoami(config) {
   return request(config, "GET", "/api/whoami");
 }
+function planLimitDetail(detail) {
+  if (!detail || typeof detail !== "object") return null;
+  const d = detail;
+  if (typeof d.limit !== "string") return null;
+  if (typeof d.current !== "number" || typeof d.max !== "number") return null;
+  return {
+    limit: d.limit,
+    plan: typeof d.plan === "string" ? d.plan : "your plan",
+    current: d.current,
+    max: d.max,
+    upgradeUrl: typeof d.upgradeUrl === "string" ? d.upgradeUrl : void 0
+  };
+}
 async function pushGuide(config, bundle, repoSlug, opts) {
   const draft = opts?.mode === "draft";
   const r = await request(
@@ -14743,6 +14756,13 @@ async function pushGuide(config, bundle, repoSlug, opts) {
       return {
         ...r,
         guidance: `feature not approved \u2014 approve it at ${config.url.replace(/\/$/, "")}/discovery/${encodeURIComponent(repoSlug)}, or POST /api/taxonomy to bulk-approve, then push again`
+      };
+    }
+    const limit = planLimitDetail(r.detail);
+    if (r.status === 403 && limit) {
+      return {
+        ...r,
+        guidance: `the guide is fine \u2014 the workspace is at its plan's scanned-feature limit (${limit.current}/${limit.max} on ${limit.plan}). Upgrade at ${limit.upgradeUrl ?? `${config.url.replace(/\/$/, "")}/settings/billing`}, or free a slot, then re-push THIS bundle \u2014 no re-research needed. Re-scanning an already-scanned feature is never blocked.`
       };
     }
     return r;
@@ -20497,6 +20517,7 @@ async function whoamiDetailed(deps) {
     kind: r.kind,
     workspace: r.workspace,
     tokenName: r.tokenName,
+    ...r.entitlement ? { entitlement: r.entitlement } : {},
     config
   };
 }
@@ -20673,7 +20694,7 @@ server.registerTool(
   "kanon_whoami",
   {
     title: "Kanon identity & config sources",
-    description: "Report which workspace the current token belongs to and WHERE each config field (url, token, repoSlug) was resolved from \u2014 so a shell KANON_API_TOKEN shadowing a fresh sign-in is visible. Never reads or returns the token value.",
+    description: "Report which workspace the current token belongs to and WHERE each config field (url, token, repoSlug) was resolved from \u2014 so a shell KANON_API_TOKEN shadowing a fresh sign-in is visible. Never reads or returns the token value. Also reports `entitlement` (scanned-feature quota: used/limit/remaining, atLimit, lastSlot, upgradeUrl) when the server supplies it \u2014 read it BEFORE starting a scan, since a scan of a NEW feature at the cap cannot be stored no matter how well it goes. Absent entitlement means unknown, so proceed.",
     inputSchema: {},
     annotations: { readOnlyHint: true }
   },

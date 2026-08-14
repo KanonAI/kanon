@@ -127,6 +127,19 @@ function devicePoll(url2, deviceCode) {
 function whoami(config3) {
   return request(config3, "GET", "/api/whoami");
 }
+function planLimitDetail(detail) {
+  if (!detail || typeof detail !== "object") return null;
+  const d = detail;
+  if (typeof d.limit !== "string") return null;
+  if (typeof d.current !== "number" || typeof d.max !== "number") return null;
+  return {
+    limit: d.limit,
+    plan: typeof d.plan === "string" ? d.plan : "your plan",
+    current: d.current,
+    max: d.max,
+    upgradeUrl: typeof d.upgradeUrl === "string" ? d.upgradeUrl : void 0
+  };
+}
 async function pushGuide(config3, bundle, repoSlug, opts) {
   const draft = opts?.mode === "draft";
   const r = await request(
@@ -142,6 +155,13 @@ async function pushGuide(config3, bundle, repoSlug, opts) {
       return {
         ...r,
         guidance: `feature not approved \u2014 approve it at ${config3.url.replace(/\/$/, "")}/discovery/${encodeURIComponent(repoSlug)}, or POST /api/taxonomy to bulk-approve, then push again`
+      };
+    }
+    const limit = planLimitDetail(r.detail);
+    if (r.status === 403 && limit) {
+      return {
+        ...r,
+        guidance: `the guide is fine \u2014 the workspace is at its plan's scanned-feature limit (${limit.current}/${limit.max} on ${limit.plan}). Upgrade at ${limit.upgradeUrl ?? `${config3.url.replace(/\/$/, "")}/settings/billing`}, or free a slot, then re-push THIS bundle \u2014 no re-research needed. Re-scanning an already-scanned feature is never blocked.`
       };
     }
     return r;
@@ -29402,6 +29422,7 @@ async function whoamiDetailed(deps) {
     kind: r.kind,
     workspace: r.workspace,
     tokenName: r.tokenName,
+    ...r.entitlement ? { entitlement: r.entitlement } : {},
     config: config3
   };
 }

@@ -188,6 +188,20 @@ out of the queue via `hasGuide`, so re-deriving is safe.
 ## 1. Preflight
 
 1. `kanon_whoami`. Not signed in → stop, point at `/kanon:setup`.
+   **Read `entitlement` and act on it here, before anything costs money.** A
+   scan that cannot be stored is worse than a scan not run: it spends the tokens
+   AND the wall-clock, and only says so at §9. Older servers omit the field —
+   absent means *unknown*, so proceed.
+   - **`atLimit: true`** → a feature with **no guide yet** cannot land. Stop
+     before §2. Report `features.used`/`features.limit` and the `upgradeUrl`,
+     and offer the alternative that still works: **re-scanning a feature that
+     already has a guide never consumes quota**, so list the `hasGuide: true`
+     features as what you CAN do now.
+   - **`lastSlot: true`** → exactly one new feature can still land. Say so
+     before you start, and in scan-all (§10) ask WHICH feature should take the
+     slot instead of letting queue order spend it.
+   - Otherwise proceed and do not raise quota again — a limit that is not near
+     is noise.
 2. **Git root + cleanliness**: find the repo root; run `git status --porcelain`.
    Guides pin the current commit, so a dirty tree makes anchors ambiguous —
    ⚠️ warn and offer to commit (or let the user proceed knowingly).
@@ -437,6 +451,15 @@ warnings. Set `status:"assembled"`.
    `repoSlug` if the bundle doesn't carry it).
    - **`skipped:true`** → "unchanged — the server kept the existing guide"
      (nothing in the boundary changed since the input hash).
+   - **403 with `detail.limit`** → the plan cap, not a defect in the guide.
+     §1 normally catches this; reaching it here means the last slot went to
+     another feature mid-sweep. Set `manifest.status:"failed"` with the reason,
+     and say plainly that **the assembled bundle is the valuable artifact**:
+     it is complete, it passed every gate, and re-pushing that exact path lands
+     it once a slot frees — no re-research. Give the `upgradeUrl` from the
+     response. **Do not delete the run dir**, and if this scan ran in a
+     worktree, tell the user the bundle lives inside it and will go away with
+     it, so it must be copied out or pushed before cleanup.
    - **else** → report claim counts + the `reviewUrl`; link the KB
      (`<server_url>/kb/<repoSlug>`). In single-feature modes, offer to scan
      the next feature (or the rest of the queue).
@@ -539,6 +562,8 @@ already-pushed features fall out via `hasGuide`.
 | `check:merge` reports a `conflict` | One rule key claimed by two DIFFERENT statements — rename one in its `claims/<aspect>.jsonl` and re-run merge. Identical restatements dedupe silently, no action. |
 | Freshness `unchanged:false` when you expected unchanged | The manifest's `capabilities`/`featureName` likely don't match the approved feature — populate them from `get_taxonomy view:"full"`. Harmless: a mismatch only researches, never a false skip; the push still returns `skipped:true`. |
 | Push `skipped:true` | Unchanged — the server kept the existing guide. Nothing to do. |
+| `whoami` `entitlement.atLimit` | Stop before §2. A NEW feature can't be stored. Report used/limit + `upgradeUrl`; offer re-scans of `hasGuide: true` features, which never consume quota. |
+| Push 403 with `detail.limit` | The plan cap, not a bad bundle. Mark `failed`, keep the run dir, hand over `detail.upgradeUrl`, and say the bundle re-pushes as-is with no re-research. Warn if it lives in a worktree that cleanup will delete. |
 | Scan-all: one feature fails terminally | Mark its manifest `failed` with a note, continue the fleet, report it in the summary. |
 | `--next` / scan-all finds an empty queue | Every approved feature already has a guide — report that and stop. |
 | `get_taxonomy` payload too large | You asked for `view: "full"`. The default compact projection carries every field §1/§10 need. |
